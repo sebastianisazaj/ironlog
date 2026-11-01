@@ -1,6 +1,7 @@
 // IronLog service worker: app shell offline + cache of exercise photos and fonts.
-// Bump VERSION when shipping changes so clients pick up the new shell.
-const VERSION = 'ironlog-v4';
+// The deploy workflow replaces __BUILD__ with the commit id, so every release gets a fresh shell cache.
+const BUILD = '__BUILD__';
+const VERSION = `ironlog-shell-${BUILD}`;
 const SHELL = [
   './', 'index.html', 'styles.css', 'app.js', 'i18n.js', 'icons.js', 'programs.js',
   'manifest.webmanifest', 'icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png', 'icons/apple-touch-icon.png',
@@ -11,14 +12,21 @@ const FONT_CACHE = 'ironlog-fonts';
 const IMG_HOSTS = ['cdn.jsdelivr.net', 'raw.githubusercontent.com'];
 const FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
 
+// cache: 'reload' skips the HTTP cache so a new release never stores the previous release's files
 self.addEventListener('install', ev => {
-  ev.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  ev.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' })))));
+});
+
+// The first install activates right away; an update waits until the user taps "Reload" in the app
+self.addEventListener('message', ev => {
+  if (ev.data?.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
 self.addEventListener('activate', ev => {
+  const old = k => (k.startsWith('ironlog-shell-') || k.startsWith('ironlog-v')) && k !== VERSION;
   ev.waitUntil(
     caches.keys()
-      .then(keys => Promise.all(keys.filter(k => k.startsWith('ironlog-v') && k !== VERSION).map(k => caches.delete(k))))
+      .then(keys => Promise.all(keys.filter(old).map(k => caches.delete(k))))
       .then(() => self.clients.claim()),
   );
 });

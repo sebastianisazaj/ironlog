@@ -1253,7 +1253,8 @@ VIEWS.settings = () => {
     <button class="btn ghost" data-act="export">${ic('download')} ${t('export')}</button>
     <label class="btn ghost">${ic('upload')} ${t('import')}<input type="file" accept="application/json,.json" id="importFile" hidden></label>
     <span class="spacer"></span><button class="btn danger" data-act="reset">${ic('trash')} ${t('reset')}</button></div></div>
-  <div class="card small muted"><h3>${t('about')}</h3>${t('about.text', { link: '<a href="https://github.com/yuhonas/free-exercise-db" target="_blank" rel="noopener">yuhonas/free-exercise-db</a>', sync: p.syncName ? t('about.sync') : '' })}</div>`;
+  <div class="card small muted"><h3>${t('about')}</h3>${t('about.text', { link: '<a href="https://github.com/yuhonas/free-exercise-db" target="_blank" rel="noopener">yuhonas/free-exercise-db</a>', sync: p.syncName ? t('about.sync') : '' })}
+    <p style="margin:10px 0 0">${t('version', { v: BUILD.startsWith('__') ? 'dev' : BUILD })}</p></div>`;
 };
 VIEWS.settings.mount = async () => {
   try {
@@ -1690,8 +1691,40 @@ function installCard({ dismissible = false } = {}) {
   return '';
 }
 
+// ---- updates: a new deploy installs in the background, then the user is offered a one-tap reload
+const BUILD = '__BUILD__'; // replaced with the commit id by the deploy workflow
+let updateReg = null, updateRequested = false;
+
+function showUpdate(reg) {
+  updateReg = reg;
+  if ($('#updateBar')) return;
+  const bar = document.createElement('div');
+  bar.id = 'updateBar';
+  bar.className = 'update-bar';
+  bar.innerHTML = `${ic('sparkles', 'acc')}<span>${t('update.ready')}</span><button class="btn primary sm" data-act="applyUpdate">${ic('refresh')} ${t('update.reload')}</button>`;
+  document.body.append(bar);
+}
+ACT.applyUpdate = () => {
+  updateRequested = true;
+  if (updateReg?.waiting) updateReg.waiting.postMessage({ type: 'SKIP_WAITING' });
+  else location.reload();
+};
+
 if ('serviceWorker' in navigator && window.isSecureContext) {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
+  navigator.serviceWorker.register('sw.js').then(reg => {
+    if (reg.waiting && navigator.serviceWorker.controller) showUpdate(reg);
+    reg.addEventListener('updatefound', () => {
+      const w = reg.installing;
+      w?.addEventListener('statechange', () => {
+        if (w.state === 'installed' && navigator.serviceWorker.controller) showUpdate(reg);
+      });
+    });
+    // installed apps can stay open for days: check when brought back to the foreground and every 30 minutes
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
+    setInterval(() => reg.update().catch(() => {}), 30 * 60 * 1000);
+  }).catch(() => {});
+  // the new worker took over after "Reload": load the new files
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (updateRequested) location.reload(); });
 }
 
 // ============================================================ boot

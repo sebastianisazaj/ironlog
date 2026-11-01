@@ -24,6 +24,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+      # Each release gets its own id, so phones drop the old offline copy and show the "new version" banner
+      - name: Stamp build id
+        run: |
+          BUILD="${GITHUB_SHA::7}"
+          sed -i "s/__BUILD__/$BUILD/g" public/sw.js public/app.js
+          grep -q "'$BUILD'" public/sw.js
+          grep -q "'$BUILD'" public/app.js
       - uses: actions/upload-pages-artifact@v3
         with:
           path: public
