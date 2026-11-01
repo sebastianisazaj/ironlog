@@ -1,5 +1,5 @@
 # Local server data: per-device sync profiles and the old image cache
-data/
+/data/
 *.part
 
 # Editor / tooling
