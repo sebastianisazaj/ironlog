@@ -19,7 +19,7 @@ const DEFAULTS = () => ({
     lang: (navigator.language || 'en').toLowerCase().startsWith('es') ? 'es' : 'en',
   },
   workouts: [], deleted: [], active: null, favorites: [], routines: [],
-  program: { id: null, next: 0 }, bodylog: [], myPrograms: [], installDismissed: false,
+  program: { id: null, next: 0 }, bodylog: [], myPrograms: [], plan: [], installDismissed: false,
   swaps: {}, noEquip: [],
 });
 
@@ -492,6 +492,14 @@ VIEWS.home = () => {
 
   if (!p.level) h += levelPicker(t('level.welcome'));
   h += installCard({ dismissible: true });
+  const todays = plansOn(todayKey()).filter(p => p.kind === 'note' || !planDone(p));
+  if (todays.length && !S.active) {
+    const next = todays.find(p => p.kind !== 'note');
+    h += `<div class="card"><div class="row"><span class="install-ic">${ic('calendar')}</span>
+      <div style="flex:1;min-width:0"><b>${t('cal.todayPlan')}</b><div class="muted small">${todays.map(p => esc(p.name)).join(' · ')}</div></div>
+      <button class="round-btn" data-go="calendar" aria-label="${t('nav.calendar')}">${ic('arrowRight')}</button></div>
+      ${next ? `<button class="btn primary big" data-act="calStart" data-id="${next.id}" style="margin-top:12px">${ic('play', 'fill')} ${t('startX', { x: esc(next.name) })}</button>` : ''}</div>`;
+  }
   if (!S.active) h += genCta();
 
   if (S.active) {
@@ -606,7 +614,7 @@ const SPLITS = {
 };
 let STAPLES = null; // exercises used by the built-in programs = proven, well-known lifts
 
-const GEN = { tab: 'day', groups: [], dur: 'normal', goal: 'hyp', ss: false, seed: 1, items: null, days: SPLITS.bro.map(d => [...d]) };
+const GEN = { tab: 'day', groups: [], count: 6, dur: 'normal', goal: 'hyp', ss: false, seed: 1, items: [], more: {}, date: null, days: SPLITS.bro.map(d => [...d]) };
 
 function mulberry32(a) {
   return () => { a |= 0; a = (a + 0x6D2B79F5) | 0; let t_ = Math.imul(a ^ (a >>> 15), 1 | a); t_ = (t_ + Math.imul(t_ ^ (t_ >>> 7), 61 | t_)) ^ t_; return ((t_ ^ (t_ >>> 14)) >>> 0) / 4294967296; };
@@ -675,6 +683,64 @@ function generate(groups, { dur, goal, ss }, seed) {
   return [...flat.filter(x => x.e.mechanic === 'compound'), ...flat.filter(x => x.e.mechanic !== 'compound')].map(x => toItem(x.e, goal, x.g));
 }
 
+// ---- "Create my workout": the user picks the muscles and how many exercises; we suggest, they choose.
+// GEN.items entries: [id, sets, reps, rest, supersetLetter|null, group|null, autoPicked]
+const groupOf = id => Object.keys(GROUPS).find(g => GROUPS[g].m.includes(EXMAP[id]?.primaryMuscles[0])) || null;
+const rankCache = new Map();
+function ranked(group) {
+  STAPLES ||= new Set(PROGRAMS.flatMap(p => p.days.flatMap(d => d.items.map(i => i[0]))));
+  const key = `${group}|${GEN.seed}|${S.profile.level}|${S.noEquip.join(',')}`;
+  if (rankCache.has(key)) return rankCache.get(key);
+  const rnd = mulberry32(GEN.seed * 131 + group.charCodeAt(0) * 7 + group.length);
+  const big = GROUPS[group].big;
+  const out = candidates(group).map(e => {
+    let s = rnd() * 2.5;
+    if (STAPLES.has(e.id)) s += 4;
+    if (big && e.mechanic === 'compound') s += 2;
+    if (e.level === (S.profile.level || 'beginner')) s += 1;
+    return [s, e];
+  }).sort((a, b) => b[0] - a[0]).map(x => x[1]);
+  rankCache.set(key, out);
+  return out;
+}
+const itemFor = (e, g, auto) => [...toItem(e, GEN.goal, g).slice(0, 4), null, g, auto];
+const coverage = g => GEN.items.filter(it => it[5] === g).length / (GROUPS[g].big ? 2 : 1);
+
+// Keep the list at GEN.count: add the best unused suggestion for the least-covered muscle, or drop automatic picks first
+function fillToCount() {
+  const groups = GEN.groups;
+  GEN.items = GEN.items.filter(it => !it[6] || groups.includes(it[5]));
+  const wasEmpty = !GEN.items.length;
+  for (let guard = 0; GEN.items.length < GEN.count && groups.length && guard < 40; guard++) {
+    const used = new Set(GEN.items.map(it => it[0]));
+    const order = [...groups].sort((a, b) => coverage(a) - coverage(b));
+    const g = order.find(x => ranked(x).some(e => !used.has(e.id)));
+    if (!g) break;
+    GEN.items.push(itemFor(ranked(g).find(e => !used.has(e.id)), g, true));
+  }
+  while (GEN.items.length > GEN.count) {
+    const i = GEN.items.map(it => it[6]).lastIndexOf(true);
+    GEN.items.splice(i >= 0 ? i : GEN.items.length - 1, 1);
+  }
+  // a fresh list starts with the big compound lifts, the way a coach would order the session
+  if (wasEmpty) {
+    const heavy = it => (EXMAP[it[0]]?.mechanic === 'compound' && GROUPS[it[5]]?.big ? 0 : 1);
+    GEN.items.sort((a, b) => heavy(a) - heavy(b));
+  }
+}
+
+// What gets started/saved/scheduled. With biseries on, muscles alternate and consecutive exercises pair up (A1/A2, B1/B2…)
+function finalItems() {
+  const base = GEN.items.map(it => [it[0], Math.min(10, Math.max(1, parseInt(it[1], 10) || 1)), String(it[2] || '10').slice(0, 12), it[3], null]);
+  if (!GEN.ss || base.length < 2) return base;
+  const byGroup = new Map();
+  GEN.items.forEach((it, i) => { const k = it[5] || '-'; if (!byGroup.has(k)) byGroup.set(k, []); byGroup.get(k).push(base[i]); });
+  const queues = [...byGroup.values()], order = [];
+  while (queues.some(q => q.length)) for (const q of queues) if (q.length) order.push(q.shift());
+  return order.map((it, i) => (i % 2 === 0 && i === order.length - 1 ? it : [...it.slice(0, 4), String.fromCharCode(65 + Math.floor(i / 2))]));
+}
+const creatorName = () => (GEN.groups.length ? GEN.groups.map(groupLabel).join(' + ') : t('gen.myWorkout'));
+
 function genCta() {
   return `<div class="card gen-cta" data-go="build"><div class="row"><span class="install-ic">${ic('sparkles')}</span>
     <div style="flex:1"><b>${t('gen.cta.title')}</b><div class="muted small">${t('gen.cta.sub')}</div></div>${ic('arrowRight')}</div></div>`;
@@ -695,20 +761,51 @@ VIEWS.build = () => {
     <p class="muted small" style="margin:12px 0 0">${ic('info')} ${t('gen.basis', { l: t(`lvl.${lvl}`) })}</p>`;
 
   if (GEN.tab === 'day') {
-    h += `<div class="card"><h2>${t('gen.muscles')}</h2>${muscleGrid(GEN.groups, 'genGroup')}${opts}
-      <button class="btn primary big" data-act="genRun" style="margin-top:16px">${ic('sparkles')} ${t('gen.generate')}</button></div>`;
-    if (GEN.items) {
-      const title = GEN.groups.map(groupLabel).join(' + ');
-      h += `<div class="card"><div class="row wrap"><h2 style="margin:0">${esc(title)}</h2><span class="spacer"></span>
-          <button class="btn sm ghost" data-act="genShuffle">${ic('refresh')} ${t('gen.regen')}</button></div>
-        <div style="margin-top:8px">${GEN.items.map((it, i) => `<div class="hist-item" data-act="showEx" data-id="${esc(it[0])}">${thumb(it[0], 56)}
-          <div style="flex:1;min-width:0"><b>${it[4] ? `<span class="ss-tag">${esc(it[4])}</span> ` : ''}${esc(exName(it[0]))}</b>
-          <div class="muted small">${groupLabel(it[5])} · ${t('setsXreps', { s: it[1], r: esc(it[2]), rest: mmss(it[3]) })}</div></div>
-          <button class="round-btn" data-act="genReroll" data-i="${i}" title="${t('gen.reroll')}" aria-label="${t('gen.reroll')}">${ic('refresh')}</button>
-          <button class="round-btn" data-act="genRemove" data-i="${i}" aria-label="${t('gen.remove')}">${ic('x')}</button></div>`).join('')}</div>
-        <div class="row wrap" style="margin-top:14px"><button class="btn ghost" data-act="genSave">${ic('save')} ${t('saveRoutine')}</button><span class="spacer"></span>
-          <button class="btn primary" data-act="genStart">${ic('play', 'fill')} ${t('gen.start')}</button></div></div>`;
+    const n = GEN.items.length;
+    h += `<div class="card"><h2>${t('gen.muscles')}</h2>${muscleGrid(GEN.groups, 'genGroup')}
+      <div class="row wrap" style="gap:16px;margin-top:16px;align-items:flex-end">
+        <div><div class="muted small">${t('gen.count')}</div><div class="stepper">
+          <button data-act="genCount" data-d="-1" aria-label="${t('gen.less')}" ${GEN.count <= 1 ? 'disabled' : ''}>${ic('minus')}</button>
+          <b>${GEN.count}</b>
+          <button data-act="genCount" data-d="1" aria-label="${t('gen.more')}" ${GEN.count >= 15 ? 'disabled' : ''}>${ic('plus')}</button></div></div>
+        <div><div class="muted small">${t('gen.goal')}</div>${segOf('genGoal', GEN.goal, [['strength', t('goal.strength')], ['hyp', t('goal.hyp')], ['endurance', t('goal.endurance')]])}</div>
+      </div>
+      <label class="switch" style="margin-top:16px"><input type="checkbox" id="genSS" ${GEN.ss ? 'checked' : ''}><i></i><span><b>${t('gen.ss')}</b><br><span class="muted small">${t('gen.ss.sub')}</span></span></label>
+      <p class="muted small" style="margin:12px 0 0">${ic('info')} ${t('gen.basis', { l: t(`lvl.${lvl}`) })}</p></div>`;
+    if (!GEN.groups.length && !n) return `${h}<div class="card empty small"><div class="big">${ic('dumbbell')}</div><p>${t('gen.pickFirst')}</p></div>`;
+
+    h += `<div class="card"><div class="row wrap"><h2 style="margin:0">${t('gen.selected')} <span class="muted small">· ${t('cal.exercises', { n })}</span></h2><span class="spacer"></span>
+        ${n ? `<button class="btn sm ghost" data-act="genClear">${ic('trash')} ${t('gen.clear')}</button>` : ''}</div>
+      ${GEN.date ? `<p class="small" style="margin:8px 0 0"><span class="chip swap">${ic('calendar')} ${esc(fromKey(GEN.date).toLocaleDateString(LOC(), { weekday: 'long', day: 'numeric', month: 'short' }))}</span></p>` : ''}
+      ${n ? GEN.items.map((it, i) => `<div class="sel-row">
+          <span class="sel-n">${i + 1}</span>${thumb(it[0], 48)}
+          <div class="sel-main"><b data-act="showEx" data-id="${esc(it[0])}">${esc(exName(it[0]))}</b>
+            <div class="sel-edit">${it[5] ? `<span class="chip">${groupLabel(it[5])}</span>` : ''}
+              <label><input type="number" inputmode="numeric" min="1" max="10" data-gi="${i}" data-gf="sets" value="${esc(it[1])}" aria-label="${t('sets')}"> ${t('sets')}</label>
+              <label>× <input type="text" data-gi="${i}" data-gf="reps" value="${esc(it[2])}" aria-label="${t('reps')}"> ${t('reps')}</label></div></div>
+          <div class="sel-actions">
+            <button class="round-btn" data-act="genMove" data-i="${i}" data-d="-1" ${i ? '' : 'disabled'} aria-label="${t('moveUp')}">${ic('arrowUp')}</button>
+            <button class="round-btn" data-act="genMove" data-i="${i}" data-d="1" ${i < n - 1 ? '' : 'disabled'} aria-label="${t('moveDown')}">${ic('arrowDown')}</button>
+            <button class="round-btn" data-act="genReroll" data-i="${i}" ${it[5] ? '' : 'disabled'} aria-label="${t('gen.reroll')}" title="${t('gen.reroll')}">${ic('refresh')}</button>
+            <button class="round-btn" data-act="genRemove" data-i="${i}" aria-label="${t('gen.remove')}">${ic('x')}</button></div></div>`).join('')
+        : `<p class="muted small">${t('gen.hintPick')}</p>`}
+      <button class="btn ghost big" data-act="genAddAny" style="margin-top:12px">${ic('plus')} ${t('gen.addAny')}</button>
+      ${n ? `<div class="row wrap" style="margin-top:14px;gap:8px">
+        <button class="btn ghost" data-act="genSave">${ic('save')} ${t('saveRoutine')}</button>
+        <button class="btn ghost" data-act="genSchedule">${ic('calendar')} ${t('cal.schedule')}</button><span class="spacer"></span>
+        <button class="btn primary" data-act="genStart">${ic('play', 'fill')} ${t('gen.start')}</button></div>` : ''}</div>`;
+
+    const chosen = new Set(GEN.items.map(it => it[0]));
+    for (const g of GEN.groups) {
+      const all = ranked(g), k = GEN.more[g] ? 16 : 6;
+      h += `<div class="card"><div class="row"><h2 style="margin:0">${t('gen.suggested', { g: groupLabel(g) })}</h2><span class="spacer"></span>
+          <span class="chip">${ic('check')} ${all.filter(e => chosen.has(e.id)).length}</span></div>
+        ${all.length ? all.slice(0, k).map(e => { const on = chosen.has(e.id); return `<div class="hist-item sugg ${on ? 'on' : ''}" data-act="genToggle" data-id="${esc(e.id)}" data-g="${g}">${thumb(e.id, 48)}
+          <div style="flex:1;min-width:0"><b>${esc(exName(e.id))}</b><div class="chips" style="margin-top:4px"><span class="chip">${esc(T(e.equipment || 'body only'))}</span>${e.mechanic ? `<span class="chip">${esc(T(e.mechanic))}</span>` : ''}</div></div>
+          <span class="add-btn" aria-hidden="true">${ic(on ? 'check' : 'plus')}</span></div>`; }).join('') : `<p class="muted small">${t('gen.empty', { g: groupLabel(g) })}</p>`}
+        ${all.length > 6 ? `<button class="btn sm ghost" data-act="genMore" data-g="${g}" style="margin-top:8px">${GEN.more[g] ? t('gen.less') : t('gen.more')}</button>` : ''}</div>`;
     }
+    if (GEN.groups.length) h += `<button class="btn ghost big" data-act="genShuffle">${ic('refresh')} ${t('gen.regen')}</button>`;
     return h;
   }
 
@@ -725,6 +822,123 @@ VIEWS.build = () => {
     <button class="btn primary big" data-act="weekCreate" style="margin-top:16px">${ic('programs')} ${t('week.create')}</button></div>`;
   return h;
 };
+
+// ============================================================ CALENDAR (plan your days, see what you actually did)
+// S.plan entries: { id, date: 'YYYY-MM-DD', kind: 'workout'|'note', name, items, programId, dayIdx }
+const dkey = ts => { const d = new Date(ts); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+const fromKey = k => { const [y, m, d] = k.split('-').map(Number); return new Date(y, m - 1, d); };
+const todayKey = () => dkey(Date.now());
+const CAL = { y: new Date().getFullYear(), m: new Date().getMonth(), sel: null, repeat: false };
+const planDone = p => S.workouts.some(w => w.planId === p.id);
+const plansOn = k => S.plan.filter(p => p.date === k);
+const workoutsOn = k => S.workouts.filter(w => dkey(w.start) === k);
+const shortDay = k => fromKey(k).toLocaleDateString(LOC(), { day: 'numeric', month: 'short' });
+
+function addPlan(base, date, repeat) {
+  const dates = [date];
+  if (repeat) {
+    const d = fromKey(date);
+    for (let x = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 7); x.getMonth() === d.getMonth(); x.setDate(x.getDate() + 7)) dates.push(dkey(x));
+  }
+  for (const k of dates) {
+    S.plan.push({ id: uid(), date: k, kind: base.kind || 'workout', name: String(base.name || '').slice(0, 80), items: base.items || [], programId: base.programId || null, dayIdx: base.dayIdx ?? null });
+  }
+  save();
+  toast(dates.length > 1 ? t('cal.addedN', { n: dates.length }) : t('cal.added', { d: shortDay(date) }));
+  return dates.length;
+}
+
+function planRow(p, past) {
+  if (p.kind === 'note') {
+    return `<div class="hist-item" style="cursor:default"><span class="cal-ic note">${ic('note')}</span><div style="flex:1;min-width:0"><b>${esc(p.name)}</b></div>
+      <button class="round-btn" data-act="calDel" data-id="${p.id}" aria-label="${t('cal.del')}">${ic('trash')}</button></div>`;
+  }
+  const done = planDone(p);
+  const status = done ? `<span class="chip good">${ic('check')} ${t('cal.doneLbl')}</span>` : past ? `<span class="chip expert">${t('cal.missed')}</span>` : '';
+  return `<div class="hist-item" data-act="calView" data-id="${p.id}"><span class="cal-ic ${done ? 'done' : 'plan'}">${ic('dumbbell')}</span>
+    <div style="flex:1;min-width:0"><b>${esc(p.name)}</b><div class="muted small">${t('cal.exercises', { n: p.items.length })} ${status}</div></div>
+    ${done ? '' : `<button class="btn sm primary" data-act="calStart" data-id="${p.id}">${ic('play', 'fill')} ${t('start')}</button>`}
+    <button class="round-btn" data-act="calDel" data-id="${p.id}" aria-label="${t('cal.del')}">${ic('trash')}</button></div>`;
+}
+
+VIEWS.calendar = () => {
+  const tk = todayKey(), sel = CAL.sel || tk;
+  const first = new Date(CAL.y, CAL.m, 1);
+  const offset = (first.getDay() + 6) % 7; // weeks start on Monday
+  const cells = Math.ceil((offset + new Date(CAL.y, CAL.m + 1, 0).getDate()) / 7) * 7;
+  const weekdays = [...Array(7)].map((_, i) => new Date(2024, 0, 1 + i).toLocaleDateString(LOC(), { weekday: 'narrow' })); // 1 Jan 2024 was a Monday
+  let grid = '';
+  for (let i = 0; i < cells; i++) {
+    const d = new Date(CAL.y, CAL.m, 1 - offset + i), k = dkey(d);
+    const plans = plansOn(k), done = workoutsOn(k);
+    const pending = plans.filter(p => p.kind !== 'note' && !planDone(p));
+    const label = done[0]?.name || pending[0]?.name || plans[0]?.name || '';
+    grid += `<button class="cal-day ${d.getMonth() === CAL.m ? '' : 'out'} ${k === tk ? 'today' : ''} ${k === sel ? 'sel' : ''} ${done.length ? 'has-done' : ''}" data-act="calSel" data-k="${k}">
+      <span class="n">${d.getDate()}</span>
+      <span class="dots">${done.length ? '<i class="d-done"></i>' : ''}${pending.length ? `<i class="${k < tk ? 'd-missed' : 'd-plan'}"></i>` : ''}${plans.some(p => p.kind === 'note') ? '<i class="d-note"></i>' : ''}</span>
+      ${label ? `<span class="lbl">${esc(label)}</span>` : ''}</button>`;
+  }
+
+  const mk = `${CAL.y}-${String(CAL.m + 1).padStart(2, '0')}`;
+  const monthWos = S.workouts.filter(w => dkey(w.start).startsWith(mk));
+  const monthPlans = S.plan.filter(p => p.date.startsWith(mk) && p.kind !== 'note');
+  const due = monthPlans.filter(p => p.date <= tk);
+  const pct = due.length ? Math.round((due.filter(planDone).length / due.length) * 100) : null;
+
+  const plans = plansOn(sel), done = workoutsOn(sel);
+  const dayPanel = `<div class="card" id="calDay"><div class="row wrap"><h2 style="margin:0">${esc(cap(fromKey(sel).toLocaleDateString(LOC(), { weekday: 'long', day: 'numeric', month: 'long' })))}</h2>
+      ${sel === tk ? `<span class="chip brand">${t('cal.today')}</span>` : ''}</div>
+    ${plans.length || done.length ? '' : `<p class="muted small">${t('cal.empty')}</p>`}
+    <div style="margin-top:6px">${plans.map(p => planRow(p, sel < tk)).join('')}
+    ${done.map(w => `<div class="hist-item" data-act="showWorkout" data-id="${w.id}"><span class="cal-ic done">${ic('check')}</span>
+      <div style="flex:1;min-width:0"><b>${esc(w.name)}</b><div class="muted small">${t('cal.completed')} · ${t('hist.line', { e: w.exercises.length, s: setsDone(w), v: `${fmtVol(volumeOf(w))} ${U()}`, d: dur((w.end || w.start) - w.start) })}</div></div></div>`).join('')}</div>
+    <h3 style="margin-top:16px">${t('cal.add')}</h3>
+    <div class="cal-add">
+      <button class="btn ghost" data-act="calBuild">${ic('sparkles')} ${t('cal.addBuild')}</button>
+      <button class="btn ghost" data-act="calRoutine">${ic('save')} ${t('cal.addRoutine')}</button>
+      <button class="btn ghost" data-act="calProgram">${ic('programs')} ${t('cal.addProgram')}</button>
+      <button class="btn ghost" data-act="calNote">${ic('note')} ${t('cal.addNote')}</button>
+    </div>
+    <label class="switch" style="margin-top:14px"><input type="checkbox" id="calRepeat" ${CAL.repeat ? 'checked' : ''}><i></i><span class="small">${t('cal.repeat')}</span></label></div>`;
+
+  return `<h1>${t('nav.calendar')}</h1>
+    <div class="card cal">
+      <div class="row"><button class="round-btn" data-act="calNav" data-d="-1" aria-label="${t('cal.prev')}">${ic('arrowLeft')}</button>
+        <h2 style="margin:0;flex:1;text-align:center">${esc(cap(first.toLocaleDateString(LOC(), { month: 'long', year: 'numeric' })))}</h2>
+        <button class="round-btn" data-act="calNav" data-d="1" aria-label="${t('cal.next')}">${ic('arrowRight')}</button></div>
+      <div class="row" style="justify-content:center;margin:8px 0 10px"><button class="chip" data-act="calToday">${ic('calendar')} ${t('cal.today')}</button></div>
+      <div class="cal-grid cal-head">${weekdays.map(w => `<span>${esc(w)}</span>`).join('')}</div>
+      <div class="cal-grid">${grid}</div>
+      <div class="cal-legend small muted"><span><i class="d-done"></i>${t('cal.doneLbl')}</span><span><i class="d-plan"></i>${t('cal.plannedLbl')}</span><span><i class="d-missed"></i>${t('cal.missed')}</span><span><i class="d-note"></i>${t('cal.addNote')}</span></div>
+    </div>
+    <div class="grid stats" style="margin-bottom:14px">
+      ${stat(cnt(monthWos.length), t('cal.monthDone'))}${stat(cnt(monthPlans.length), t('cal.monthPlanned'))}
+      ${stat(pct == null ? '—' : `${cnt(pct)}%`, t('cal.adherence'))}
+      ${stat(`${cnt(toD(monthWos.reduce((v, w) => v + volumeOf(w), 0)), 'vol')}<small class="muted"> ${U()}</small>`, t('cal.monthVol'))}
+    </div>
+    ${dayPanel}`;
+};
+
+// Schedule a ready-made list of exercises (from the creator) on a date of the user's choice
+let SCHED = null;
+function openSchedule(base, date) {
+  SCHED = base;
+  openModal(`<button class="close" data-act="close" aria-label="Close">${ic('x')}</button>
+    <h2>${ic('calendar', 'acc')} ${t('cal.schedule')}</h2><p class="muted">${esc(base.name)} · ${t('cal.exercises', { n: base.items.length })}</p>
+    <label class="field"><span>${t('cal.pickDate')}</span><input type="date" id="schedDate" value="${date || todayKey()}"></label>
+    <label class="switch" style="margin-bottom:16px"><input type="checkbox" id="schedRepeat"><i></i><span class="small">${t('cal.repeat')}</span></label>
+    <button class="btn primary big" data-act="schedConfirm">${ic('check')} ${t('cal.scheduleBtn')}</button>`);
+}
+
+function viewPlan(id) {
+  const p = S.plan.find(x => x.id === id);
+  if (!p) return;
+  openModal(`<button class="close" data-act="close" aria-label="Close">${ic('x')}</button>
+    <h2>${esc(p.name)}</h2><p class="muted">${esc(cap(fromKey(p.date).toLocaleDateString(LOC(), { weekday: 'long', day: 'numeric', month: 'long' })))} · ${t('cal.exercises', { n: p.items.length })}</p>
+    ${p.items.map(programItem).join('')}
+    <div class="row wrap" style="margin-top:14px"><button class="btn danger" data-act="calDel" data-id="${p.id}">${ic('trash')} ${t('cal.del')}</button><span class="spacer"></span>
+      ${planDone(p) ? `<span class="chip good">${ic('check')} ${t('cal.doneLbl')}</span>` : `<button class="btn primary" data-act="calStart" data-id="${p.id}">${ic('play', 'fill')} ${t('start')}</button>`}</div>`);
+}
 
 // ============================================================ LIBRARY
 const LIB = { q: '', muscle: '', equip: '', level: '', cat: '', fav: false, limit: 48 };
@@ -861,11 +1075,11 @@ function applyAlt(id) {
 }
 
 // ---- picker (add exercise to workout / pick any alternative)
-const PICK = { q: '', muscle: '', replace: null, alt: false };
-function openPicker({ replace = null, alt = false } = {}) {
-  Object.assign(PICK, { q: '', muscle: '', replace, alt });
+const PICK = { q: '', muscle: '', replace: null, alt: false, gen: false };
+function openPicker({ replace = null, alt = false, gen = false } = {}) {
+  Object.assign(PICK, { q: '', muscle: '', replace, alt, gen });
   openModal(`<button class="close" data-act="close" aria-label="Close">${ic('x')}</button>
-    <h2>${alt || replace != null ? t('picker.replace') : t('picker.add')}</h2>
+    <h2>${gen ? t('gen.addAny') : alt || replace != null ? t('picker.replace') : t('picker.add')}</h2>
     <input type="search" id="pickQ" placeholder="${t('picker.search', { n: EX.length })}">
     <div class="chips" style="margin:10px 0">${['', ...sortBy(MUSCLES, T)].map(m => `<button class="chip" data-act="pickMuscle" data-m="${esc(m)}">${m ? esc(T(m)) : t('all')}</button>`).join('')}</div>
     <div id="pickList"></div>`);
@@ -887,9 +1101,9 @@ function renderPick() {
 }
 
 // ============================================================ WORKOUT
-function startWorkout({ name = 'Workout', items = [], programId = null, dayIdx = null } = {}) {
+function startWorkout({ name = 'Workout', items = [], programId = null, dayIdx = null, planId = null } = {}) {
   if (S.active && !confirm(t('wo.inProgressConfirm'))) return;
-  S.active = { id: uid(), name, start: Date.now(), programId, dayIdx, note: '', exercises: [] };
+  S.active = { id: uid(), name, start: Date.now(), programId, dayIdx, planId, note: '', exercises: [] };
   for (const it of items) {
     const r = resolve(it[0]);
     pushExercise(r.id, { sets: it[1], target: it[2], rest: it[3], orig: r.why ? r.orig : null, ss: it[4] || null });
@@ -1279,6 +1493,7 @@ function mergeDocs(a, b) {
   out.workouts = pick([...a.workouts, ...b.workouts]);
   out.bodylog = pick([...(a.bodylog || []), ...(b.bodylog || [])]);
   out.routines = pick([...(a.routines || []), ...(b.routines || [])]);
+  out.plan = pick([...(a.plan || []), ...(b.plan || [])]);
   if (out.active && out.workouts.some(w => w.id === out.active.id)) out.active = null;
   return out;
 }
@@ -1335,43 +1550,122 @@ const ACT = {
 
   // workout builder
   genTab: el => { GEN.tab = el.dataset.v; render({ animate: true }); },
-  genGroup: el => {
-    const g = el.dataset.g;
-    GEN.groups = GEN.groups.includes(g) ? GEN.groups.filter(x => x !== g) : [...GEN.groups, g];
-    el.classList.toggle('on', GEN.groups.includes(g));
-  },
   genDur: el => { GEN.dur = el.dataset.v; render(); },
-  genGoal: el => { GEN.goal = el.dataset.v; render(); },
-  genRun: () => {
-    if (!GEN.groups.length) return toast(t('gen.pickOne'));
-    GEN.seed = (Date.now() % 100000) + 1;
-    GEN.items = generate(GEN.groups, GEN, GEN.seed);
-    for (const g of GEN.groups) if (!GEN.items.some(it => it[5] === g)) toast(t('gen.empty', { g: groupLabel(g) }));
-    render({ animate: true });
-    setTimeout(() => $$('.card')[1]?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+  genGroup: el => {
+    const g = el.dataset.g, had = GEN.groups.includes(g);
+    GEN.groups = had ? GEN.groups.filter(x => x !== g) : [...GEN.groups, g];
+    // dropping a muscle drops its exercises; adding one re-balances the automatic picks so it gets its share
+    GEN.items = had ? GEN.items.filter(it => it[5] !== g) : GEN.items.filter(it => !it[6]);
+    fillToCount();
+    render();
   },
-  genShuffle: () => { GEN.seed++; GEN.items = generate(GEN.groups, GEN, GEN.seed); render({ animate: true }); },
+  genCount: el => { GEN.count = Math.min(15, Math.max(1, GEN.count + +el.dataset.d)); fillToCount(); render(); },
+  genGoal: el => {
+    GEN.goal = el.dataset.v;
+    GEN.items = GEN.items.map(it => (EXMAP[it[0]] ? itemFor(EXMAP[it[0]], it[5], it[6]) : it));
+    render();
+  },
+  genToggle: el => {
+    const id = el.dataset.id, i = GEN.items.findIndex(it => it[0] === id);
+    if (i >= 0) GEN.items.splice(i, 1); else GEN.items.push(itemFor(EXMAP[id], el.dataset.g, false));
+    GEN.count = Math.max(1, GEN.items.length);
+    render();
+  },
+  genMore: el => { GEN.more[el.dataset.g] = !GEN.more[el.dataset.g]; render(); },
+  genShuffle: () => { GEN.seed++; GEN.items = GEN.items.filter(it => !it[6]); fillToCount(); render({ animate: true }); },
   genReroll: el => {
     const i = +el.dataset.i, it = GEN.items[i];
     const used = new Set(GEN.items.map(x => x[0]));
-    const pool = candidates(it[5]).filter(e => !used.has(e.id));
+    const pool = ranked(it[5]).filter(e => !used.has(e.id));
     if (!pool.length) return;
-    const e = pool[Math.floor(Math.random() * pool.length)];
-    const fresh = toItem(e, GEN.goal, it[5]);
-    fresh[4] = it[4];
-    GEN.items[i] = fresh;
+    const e = pool[Math.floor(Math.random() * Math.min(pool.length, 6))];
+    GEN.items[i] = [e.id, it[1], it[2], it[3], null, it[5], false];
     render();
   },
-  genRemove: el => { GEN.items.splice(+el.dataset.i, 1); render(); },
+  genRemove: el => { GEN.items.splice(+el.dataset.i, 1); GEN.count = Math.max(1, GEN.items.length); render(); },
+  genMove: el => {
+    const i = +el.dataset.i, j = i + +el.dataset.d;
+    [GEN.items[i], GEN.items[j]] = [GEN.items[j], GEN.items[i]];
+    render();
+  },
+  genClear: () => { GEN.items = []; render(); },
+  genAddAny: () => openPicker({ gen: true }),
   genStart: () => {
-    if (!GEN.items?.length) return;
-    startWorkout({ name: GEN.groups.map(groupLabel).join(' + '), items: GEN.items });
+    if (!GEN.items.length) return;
+    startWorkout({ name: creatorName(), items: finalItems() });
   },
   genSave: () => {
-    const name = prompt(t('routine.name'), GEN.groups.map(groupLabel).join(' + '));
+    const name = prompt(t('routine.name'), creatorName());
     if (!name) return;
-    S.routines.push({ id: uid(), name: name.slice(0, 60), items: GEN.items.map(it => it.slice(0, 5)) });
+    S.routines.push({ id: uid(), name: name.slice(0, 60), items: finalItems() });
     save(); toast(t('routine.saved'));
+  },
+  genSchedule: () => openSchedule({ name: creatorName(), items: finalItems() }, GEN.date),
+
+  // calendar
+  calSel: el => {
+    const k = el.dataset.k, d = fromKey(k);
+    CAL.sel = k;
+    const moved = d.getMonth() !== CAL.m || d.getFullYear() !== CAL.y;
+    CAL.y = d.getFullYear(); CAL.m = d.getMonth();
+    render({ animate: moved });
+    if (matchMedia('(max-width: 899px)').matches) setTimeout(() => $('#calDay')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+  },
+  calNav: el => {
+    const d = new Date(CAL.y, CAL.m + +el.dataset.d, 1);
+    CAL.y = d.getFullYear(); CAL.m = d.getMonth();
+    render({ animate: true });
+  },
+  calToday: () => { const d = new Date(); CAL.y = d.getFullYear(); CAL.m = d.getMonth(); CAL.sel = todayKey(); render({ animate: true }); },
+  calBuild: () => { GEN.date = CAL.sel || todayKey(); GEN.tab = 'day'; go('build'); },
+  calRoutine: () => {
+    openModal(`<button class="close" data-act="close" aria-label="Close">${ic('x')}</button><h2>${t('cal.chooseRoutine')}</h2>
+      ${S.routines.length ? S.routines.map(r => `<div class="hist-item" data-act="calPickRoutine" data-id="${r.id}">${thumb(resolve(r.items[0]?.[0] || '').id, 48)}
+        <div style="flex:1;min-width:0"><b>${esc(r.name)}</b><div class="muted small">${t('cal.exercises', { n: r.items.length })}</div></div>${ic('plus')}</div>`).join('')
+      : `<p class="muted">${t('cal.noRoutines')}</p><button class="btn primary" data-act="calBuild">${ic('sparkles')} ${t('cal.addBuild')}</button>`}`);
+  },
+  calPickRoutine: el => {
+    const r = S.routines.find(x => x.id === el.dataset.id);
+    addPlan({ name: r.name, items: r.items }, CAL.sel || todayKey(), CAL.repeat);
+    closeModal(); render();
+  },
+  calProgram: () => {
+    const seen = new Set();
+    const progs = [findProgram(p => p.id === S.program.id), ...S.myPrograms, ...PROGRAMS.filter(p => p.level === (S.profile.level || 'beginner'))]
+      .filter(p => p && !seen.has(p.id) && seen.add(p.id));
+    openModal(`<button class="close" data-act="close" aria-label="Close">${ic('x')}</button><h2>${t('cal.chooseProgram')}</h2>
+      ${progs.map(p => `<div class="card"><b>${esc(L(p.name))}</b>${S.program.id === p.id ? ` <span class="chip brand">${t('following')}</span>` : ''}
+        <div class="chips" style="margin-top:10px">${p.days.map((d, di) => `<button class="chip" data-act="calPickDay" data-prog="${p.id}" data-day="${di}">${ic('plus')} ${esc(L(d.name))}</button>`).join('')}</div></div>`).join('')}`);
+  },
+  calPickDay: el => {
+    const p = findProgram(x => x.id === el.dataset.prog), di = +el.dataset.day;
+    addPlan({ name: `${L(p.name)} — ${L(p.days[di].name)}`, items: p.days[di].items, programId: p.id, dayIdx: di }, CAL.sel || todayKey(), CAL.repeat);
+    closeModal(); render();
+  },
+  calNote: () => {
+    const text = prompt(t('cal.note.ph'));
+    if (!text || !text.trim()) return;
+    addPlan({ kind: 'note', name: text.trim() }, CAL.sel || todayKey(), CAL.repeat);
+    render();
+  },
+  calStart: el => {
+    const p = S.plan.find(x => x.id === el.dataset.id);
+    if (p) startWorkout({ name: p.name, items: p.items, programId: p.programId, dayIdx: p.dayIdx, planId: p.id });
+  },
+  calView: el => viewPlan(el.dataset.id),
+  calDel: el => {
+    S.plan = S.plan.filter(p => p.id !== el.dataset.id);
+    S.deleted.push(el.dataset.id);
+    save(); closeModal(); render();
+  },
+  schedConfirm: () => {
+    const date = $('#schedDate').value;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !SCHED) return;
+    addPlan(SCHED, date, $('#schedRepeat').checked);
+    const d = fromKey(date);
+    Object.assign(CAL, { y: d.getFullYear(), m: d.getMonth(), sel: date });
+    GEN.date = null;
+    go('calendar');
   },
   weekDays: el => {
     const n = +el.dataset.v;
@@ -1466,6 +1760,7 @@ const ACT = {
   pickEx: el => {
     const id = el.dataset.id;
     if (PICK.alt) return applyAlt(id);
+    if (PICK.gen) { GEN.items.push(itemFor(EXMAP[id], groupOf(id), false)); GEN.count = GEN.items.length; closeModal(); return render(); }
     if (!S.active) { closeModal(); return startWorkout({ name: t('session', { x: exName(id) }), items: [[id, 3, '', S.profile.rest]] }); }
     if (PICK.replace != null) { const old = S.active.exercises[PICK.replace]; pushExercise(id, { sets: old.sets.length, target: old.target, rest: old.rest }, PICK.replace); }
     else pushExercise(id);
@@ -1608,6 +1903,7 @@ document.addEventListener('input', ev => {
     persist(); updateWoStats();
     return;
   }
+  if (el.dataset.gi != null) { const it = GEN.items[+el.dataset.gi]; if (it) it[el.dataset.gf === 'sets' ? 1 : 2] = el.value; return; }
   if (el.id === 'woName' && S.active) { S.active.name = el.value; persist(); return; }
   if (el.id === 'woNote' && S.active) { S.active.note = el.value; persist(); return; }
   if (el.id === 'libQ') { LIB.q = el.value; LIB.limit = 48; renderGrid(false); return; }
@@ -1633,6 +1929,7 @@ document.addEventListener('change', ev => {
   if (el.dataset.lib) { LIB[el.dataset.lib] = el.value; LIB.limit = 48; renderGrid(); return; }
   if (el.id === 'progEx') { PROG.ex = el.value; render(); return; }
   if (el.id === 'genSS') { GEN.ss = el.checked; return; }
+  if (el.id === 'calRepeat') { CAL.repeat = el.checked; return; }
   if (el.dataset.pref) {
     const k = el.dataset.pref;
     if (k === 'name') S.profile.name = el.value.trim().slice(0, 40);
@@ -1710,7 +2007,12 @@ ACT.applyUpdate = () => {
   else location.reload();
 };
 
-if ('serviceWorker' in navigator && window.isSecureContext) {
+// Local development (unstamped build) skips the offline cache so edits show up on reload; add ?sw=1 to test it anyway
+const DEV_NO_SW = BUILD.startsWith('__') && !location.search.includes('sw=1');
+if ('serviceWorker' in navigator && DEV_NO_SW) {
+  navigator.serviceWorker.getRegistrations().then(rs => rs.forEach(r => r.unregister())).catch(() => {});
+  caches.keys().then(ks => ks.filter(k => k.startsWith('ironlog-shell-')).forEach(k => caches.delete(k))).catch(() => {});
+} else if ('serviceWorker' in navigator && window.isSecureContext) {
   navigator.serviceWorker.register('sw.js').then(reg => {
     if (reg.waiting && navigator.serviceWorker.controller) showUpdate(reg);
     reg.addEventListener('updatefound', () => {

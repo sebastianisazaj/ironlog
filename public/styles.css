@@ -202,9 +202,14 @@ ol.steps { padding-left: 20px; } ol.steps li { margin-bottom: 8px; }
 .sheet { width: 100%; max-width: 720px; max-height: 92vh; overflow: auto; border-radius: 28px 28px 0 0; padding: 22px 18px calc(26px + env(safe-area-inset-bottom));
   background: var(--glass-strong); --blur: 34px; animation: sheetUp .5s var(--spring); }
 @media (min-width: 720px) { .modal { align-items: center; } .sheet { border-radius: 28px; animation: pop .45s var(--spring); } }
-.sheet .close { float: right; width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--glass-border); background: var(--glass); font-size: 1rem;
+/* The close button must sit above the sheet's animated children: an element with a running/filled transform
+   animation is its own stacking layer and would otherwise paint over (and swallow taps on) a plain float.
+   Sticky keeps it reachable while long sheets scroll. */
+.sheet .close { position: sticky; top: 0; z-index: 20; float: right; width: 40px; height: 40px; margin: -4px -4px 0 8px; border-radius: 50%;
+  border: 1px solid var(--glass-border); background: var(--glass-strong); font-size: 1rem; -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
   transition: transform .3s var(--spring); }
 .sheet .close:hover { transform: rotate(90deg); }
+.sheet .close::before { content: ""; position: absolute; inset: -8px; } /* larger touch target */
 @keyframes fade { from { opacity: 0; } }
 @keyframes sheetUp { from { transform: translateY(70px); opacity: 0; } }
 @keyframes pop { from { transform: scale(.92); opacity: 0; } }
@@ -390,3 +395,58 @@ tr.just td { animation: flash .8s var(--ease); }
   background: var(--glass-strong); -webkit-backdrop-filter: blur(var(--blur)) saturate(180%); backdrop-filter: blur(var(--blur)) saturate(180%);
   border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--glass-border)); box-shadow: var(--shadow), inset 0 1px 0 var(--glass-hi);
   font-weight: 700; font-size: .9rem; animation: toastIn .5s var(--spring); }
+
+/* ================================================================ create-your-workout */
+.stepper { display: inline-flex; align-items: center; gap: 4px; padding: 4px; border-radius: 14px; background: var(--glass); border: 1px solid var(--glass-border); }
+.stepper button { width: 40px; height: 36px; border-radius: 10px; border: 0; background: var(--chip); display: grid; place-items: center; transition: transform .2s var(--spring); }
+.stepper button:active { transform: scale(.88); }
+.stepper button:disabled { opacity: .35; }
+.stepper b { min-width: 34px; text-align: center; font-size: 1.25rem; font-variant-numeric: tabular-nums; }
+.sel-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); animation: rise .4s var(--ease) both; }
+.sel-row:last-of-type { border-bottom: 0; }
+.sel-n { width: 24px; height: 24px; border-radius: 8px; display: grid; place-items: center; font-size: .75rem; font-weight: 800; flex: none;
+  background: linear-gradient(135deg, var(--accent), var(--magenta)); color: #fff; }
+.sel-main { flex: 1; min-width: 0; }
+.sel-main > b { display: block; cursor: pointer; line-height: 1.25; }
+.sel-edit { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 6px; font-size: .8rem; color: var(--muted); }
+.sel-edit label { display: inline-flex; align-items: center; gap: 4px; }
+.sel-edit input { width: 52px; padding: 5px 6px; text-align: center; border-radius: 9px; font-weight: 700; color: var(--text); }
+.sel-edit input[type=text] { width: 64px; }
+.sel-actions { display: grid; grid-template-columns: repeat(2, 34px); gap: 4px; flex: none; }
+.sel-actions .round-btn { width: 34px; height: 32px; border-radius: 10px; }
+.sel-actions .round-btn:disabled { opacity: .3; }
+.hist-item.sugg .add-btn { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; flex: none; border: 1px solid var(--glass-border);
+  background: var(--glass); transition: transform .3s var(--spring), background .3s, color .3s; }
+.hist-item.sugg.on .add-btn { background: linear-gradient(135deg, #22c58b, #19c3ff); color: #04261b; border-color: transparent; transform: rotate(360deg); }
+.hist-item.sugg.on { background: color-mix(in srgb, var(--good) 8%, transparent); }
+.chip.good { background: color-mix(in srgb, var(--good) 20%, transparent); color: var(--good); }
+
+/* ================================================================ calendar */
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
+.cal-head span { text-align: center; font-size: .72rem; font-weight: 800; color: var(--muted); text-transform: uppercase; padding: 2px 0 6px; }
+.cal-day { position: relative; min-height: 58px; padding: 6px 4px 4px; border-radius: 12px; border: 1px solid var(--glass-border); background: var(--glass);
+  display: flex; flex-direction: column; align-items: center; gap: 3px; overflow: hidden; transition: transform .25s var(--spring), background .25s, border-color .25s; }
+.cal-day:hover { transform: translateY(-2px); }
+.cal-day:active { transform: scale(.94); }
+.cal-day .n { font-weight: 800; font-size: .9rem; font-variant-numeric: tabular-nums; }
+.cal-day.out { opacity: .38; }
+.cal-day.today .n { width: 26px; height: 26px; margin-top: -3px; border-radius: 50%; display: grid; place-items: center; color: #fff;
+  background: linear-gradient(135deg, var(--accent), var(--magenta)); box-shadow: 0 4px 12px rgba(255, 90, 54, .45); }
+.cal-day.sel { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
+.cal-day.has-done { background: color-mix(in srgb, var(--good) 12%, var(--glass)); }
+.cal-day .dots { display: flex; gap: 3px; min-height: 7px; }
+.cal-day .lbl { font-size: .58rem; font-weight: 700; line-height: 1.15; color: var(--muted); width: 100%; text-align: center;
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-word; }
+@media (max-width: 480px) { .cal-day { min-height: 50px; } .cal-day .lbl { display: none; } }
+.cal-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; justify-content: center; margin-top: 12px; }
+.cal-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.d-done, .d-plan, .d-missed, .d-note { display: inline-block; width: 7px; height: 7px; border-radius: 50%; }
+.d-done { background: var(--good); box-shadow: 0 0 6px var(--good); }
+.d-plan { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+.d-missed { background: transparent; border: 2px solid var(--bad); width: 8px; height: 8px; }
+.d-note { background: var(--violet); }
+.cal-ic { width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center; flex: none; background: var(--chip); }
+.cal-ic.plan { color: var(--accent); } .cal-ic.done { color: var(--good); } .cal-ic.note { color: var(--violet); }
+.cal-add { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.cal-add .btn { justify-content: flex-start; text-align: left; }
+input[type=date] { background: var(--glass-input); border: 1px solid var(--glass-border); border-radius: 14px; padding: 11px 14px; width: 100%; color: var(--text); }
