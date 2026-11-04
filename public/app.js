@@ -34,7 +34,7 @@ function load() {
 let S = load();
 
 function persist() {
-  try { localStorage.setItem(KEY, JSON.stringify(S)); } catch { toast(t('storageFail')); }
+  try { localStorage.setItem(KEY, JSON.stringify(S)); } catch { fail(t('storageFail')); }
 }
 function save() {
   S.updatedAt = Date.now();
@@ -242,13 +242,109 @@ function recentPRs(limit = 5) {
 }
 
 // ============================================================ UI helpers
-function toast(msg, cls = '') {
+// ---- feedback: toasts, dialogs, "done" pop-up, small animations
+const TOAST_ICONS = { success: 'check', error: 'x', warn: 'alert', info: 'info', pr: 'trophy' };
+// toast(html, 'success' | 'error' | 'warn' | 'info' | 'pr', { action: { label, fn }, ms })
+function toast(msg, kind = 'info', { action = null, ms = action ? 5000 : kind === 'error' ? 4200 : 2800 } = {}) {
+  const box = $('#toasts');
   const el = document.createElement('div');
-  el.className = `toast ${cls}`;
-  el.innerHTML = msg;
-  $('#toasts').append(el);
-  setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 400); }, 3300);
+  el.className = `toast ${kind}`;
+  el.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+  el.innerHTML = `<span class="t-ic">${ic(TOAST_ICONS[kind] || 'info')}</span><div class="t-msg">${msg}</div>
+    ${action ? `<button class="t-act">${esc(action.label)}</button>` : ''}<i class="t-bar" style="animation-duration:${ms}ms"></i>`;
+  let done = false;
+  const close = () => { if (done) return; done = true; el.classList.add('out'); setTimeout(() => el.remove(), 350); };
+  el.addEventListener('click', ev => { if (action && ev.target.closest('.t-act')) action.fn(); close(); });
+  box.append(el);
+  while (box.children.length > 3) box.firstElementChild.remove();
+  setTimeout(close, ms);
+  if (kind === 'error') navigator.vibrate?.([30, 40, 30]);
+  return el;
 }
+const ok = (msg, opts) => toast(msg, 'success', opts);
+const fail = (msg, opts) => toast(msg, 'error', opts);
+const warn = (msg, opts) => toast(msg, 'warn', opts);
+
+// Delete-style actions apply at once and offer a 5 s undo (restores the whole previous state)
+function undoable(msg, fn) {
+  const snap = JSON.stringify(S);
+  fn();
+  toast(msg, 'info', { action: { label: t('undo'), fn: () => { S = hydrate(JSON.parse(snap)); save(); render(); ok(t('undone')); } } });
+}
+
+// Glass dialog in place of confirm()/prompt(). Resolves true/false, the typed text (or null), or a choice value.
+function ask({ title = t('confirm.title'), msg = '', ok: okLabel = t('ok'), cancel = t('cancel'), danger = false, input = false, value = '', placeholder = '', choices = null } = {}) {
+  return new Promise(resolve => {
+    $('#dialog')?.remove();
+    const d = document.createElement('div');
+    d.id = 'dialog';
+    d.className = 'dialog';
+    d.innerHTML = `<div class="dialog-card" role="dialog" aria-modal="true">
+      <span class="dialog-ic ${danger ? 'danger' : ''}">${ic(danger ? 'alert' : input ? 'note' : 'info')}</span>
+      <h3>${esc(title)}</h3>${msg ? `<p class="muted">${esc(msg).replace(/\n/g, '<br>')}</p>` : ''}
+      ${input ? `<input type="text" id="dialogInput" value="${esc(value)}" placeholder="${esc(placeholder)}" maxlength="80">` : ''}
+      <div class="dialog-btns">${choices
+        ? `${choices.map((c, i) => `<button class="btn ${i ? 'ghost' : 'primary'}" data-v="${i}">${esc(c.label)}</button>`).join('')}<button class="btn ghost" data-v="x">${esc(cancel)}</button>`
+        : `<button class="btn ghost" data-v="x">${esc(cancel)}</button><button class="btn ${danger ? 'danger-solid' : 'primary'}" data-v="ok">${esc(okLabel)}</button>`}</div></div>`;
+    const finish = v => { d.classList.add('out'); setTimeout(() => d.remove(), 220); document.removeEventListener('keydown', key, true); resolve(v); };
+    const result = v => {
+      if (v === 'x') return finish(input ? null : choices ? null : false);
+      if (choices) return finish(choices[+v].value);
+      if (input) { const txt = $('#dialogInput').value.trim(); if (!txt) return shake($('#dialogInput')); return finish(txt); }
+      finish(true);
+    };
+    const key = ev => {
+      if (ev.key === 'Escape') { ev.stopPropagation(); result('x'); }
+      if (ev.key === 'Enter' && !choices) { ev.preventDefault(); ev.stopPropagation(); result('ok'); }
+    };
+    d.addEventListener('click', ev => { const b = ev.target.closest('[data-v]'); if (b) result(b.dataset.v); else if (ev.target === d) result('x'); });
+    document.addEventListener('keydown', key, true);
+    document.body.append(d);
+    setTimeout(() => (input ? $('#dialogInput') : d.querySelector('.btn.primary, .btn.danger-solid'))?.focus(), 60);
+  });
+}
+
+// Big animated check for moments worth celebrating (saved, scheduled, created…)
+function popDone(title, sub = '') {
+  $('#popDone')?.remove();
+  const p = document.createElement('div');
+  p.id = 'popDone';
+  p.className = 'pop-done';
+  p.innerHTML = `<div class="pop-card"><svg viewBox="0 0 52 52" class="pop-check" aria-hidden="true"><circle cx="26" cy="26" r="23"/><path d="M15 27l7 7 15-16"/></svg>
+    <b>${title}</b>${sub ? `<span class="muted small">${sub}</span>` : ''}</div>`;
+  p.addEventListener('click', () => p.remove());
+  document.body.append(p);
+  navigator.vibrate?.([15, 40, 25]);
+  setTimeout(() => { p.classList.add('out'); setTimeout(() => p.remove(), 300); }, 1500);
+}
+
+function shake(el) {
+  if (!el) return;
+  el.classList.remove('shake'); void el.offsetWidth; el.classList.add('shake');
+  setTimeout(() => el.classList.remove('shake'), 500);
+}
+// Animate a row/card out, then run the state change
+function outThen(el, fn) {
+  const row = el?.closest('.sel-row, .hist-item, .card, .wo-ex');
+  if (!row || reducedMotion()) return fn();
+  row.classList.add('leaving');
+  setTimeout(fn, 230);
+}
+
+// Material-style ripple on any button press
+document.addEventListener('pointerdown', ev => {
+  const b = ev.target.closest('.btn, .round-btn, button.chip, .check, .seg button, .muscle-grid button, .cal-day, .stepper button');
+  if (!b || reducedMotion()) return;
+  const r = b.getBoundingClientRect(), size = Math.max(r.width, r.height) * 2;
+  const s = document.createElement('span');
+  s.className = 'ripple';
+  s.style.cssText = `width:${size}px;height:${size}px;left:${ev.clientX - r.left - size / 2}px;top:${ev.clientY - r.top - size / 2}px`;
+  b.append(s);
+  setTimeout(() => s.remove(), 600);
+}, { passive: true });
+
+window.addEventListener('offline', () => warn(t('offline')));
+window.addEventListener('online', () => ok(t('online')));
 
 let demoTimer = null;
 function openModal(html) {
@@ -556,7 +652,8 @@ VIEWS.programs = () => {
   else h += `<div class="grid two">${S.routines.map(r => `<div class="card"><div class="row"><h3 style="margin:0">${esc(r.name)}</h3><span class="spacer"></span>
       <button class="round-btn" data-act="delRoutine" data-id="${r.id}" aria-label="${t('deleteRoutine')}">${ic('trash')}</button></div>
       <p class="muted small">${r.items.map(i => esc(exName(resolve(i[0]).id))).join(' · ')}</p>
-      <button class="btn primary" data-act="startRoutine" data-id="${r.id}">${ic('play', 'fill')} ${t('start')}</button></div>`).join('')}</div>`;
+      <div class="row wrap"><button class="btn primary" data-act="startRoutine" data-id="${r.id}">${ic('play', 'fill')} ${t('start')}</button>
+        <button class="btn ghost" data-act="editRoutine" data-id="${r.id}">${ic('edit')} ${t('edit')}</button></div></div>`).join('')}</div>`;
   return h;
 };
 
@@ -614,7 +711,7 @@ const SPLITS = {
 };
 let STAPLES = null; // exercises used by the built-in programs = proven, well-known lifts
 
-const GEN = { tab: 'day', groups: [], count: 6, dur: 'normal', goal: 'hyp', ss: false, seed: 1, items: [], more: {}, date: null, days: SPLITS.bro.map(d => [...d]) };
+const GEN = { tab: 'day', name: '', edit: null, groups: [], count: 6, dur: 'normal', goal: 'hyp', ss: false, seed: 1, items: [], more: {}, date: null, days: SPLITS.bro.map(d => [...d]) };
 
 function mulberry32(a) {
   return () => { a |= 0; a = (a + 0x6D2B79F5) | 0; let t_ = Math.imul(a ^ (a >>> 15), 1 | a); t_ = (t_ + Math.imul(t_ ^ (t_ >>> 7), 61 | t_)) ^ t_; return ((t_ ^ (t_ >>> 14)) >>> 0) / 4294967296; };
@@ -731,14 +828,33 @@ function fillToCount() {
 
 // What gets started/saved/scheduled. With biseries on, muscles alternate and consecutive exercises pair up (A1/A2, B1/B2…)
 function finalItems() {
-  const base = GEN.items.map(it => [it[0], Math.min(10, Math.max(1, parseInt(it[1], 10) || 1)), String(it[2] || '10').slice(0, 12), it[3], null]);
-  if (!GEN.ss || base.length < 2) return base;
+  return GEN.items.map((it, i) => [it[0], Math.min(10, Math.max(1, parseInt(it[1], 10) || 1)), String(it[2] || '10').slice(0, 12), it[3], ssLetter(i)]);
+}
+// A1/A2, B1/B2… for consecutive pairs; a lone last exercise stays unpaired
+const ssLetter = i => (GEN.ss && GEN.items.length > 1 && !(i % 2 === 0 && i === GEN.items.length - 1) ? String.fromCharCode(65 + Math.floor(i / 2)) : null);
+function interleaveGroups() {
   const byGroup = new Map();
-  GEN.items.forEach((it, i) => { const k = it[5] || '-'; if (!byGroup.has(k)) byGroup.set(k, []); byGroup.get(k).push(base[i]); });
+  for (const it of GEN.items) { const k = it[5] || '-'; if (!byGroup.has(k)) byGroup.set(k, []); byGroup.get(k).push(it); }
   const queues = [...byGroup.values()], order = [];
   while (queues.some(q => q.length)) for (const q of queues) if (q.length) order.push(q.shift());
-  return order.map((it, i) => (i % 2 === 0 && i === order.length - 1 ? it : [...it.slice(0, 4), String.fromCharCode(65 + Math.floor(i / 2))]));
+  GEN.items = order;
 }
+const genTitle = () => GEN.name.trim() || creatorName();
+function loadForEdit(kind, id) {
+  const src = kind === 'routine' ? S.routines.find(r => r.id === id) : S.plan.find(p => p.id === id);
+  if (!src) return;
+  closeModal();
+  GEN.edit = { kind, id };
+  GEN.name = src.name;
+  GEN.items = src.items.map(it => [it[0], it[1], it[2], it[3] ?? S.profile.rest, null, groupOf(it[0]), false]);
+  GEN.groups = [...new Set(GEN.items.map(it => it[5]).filter(Boolean))];
+  GEN.count = Math.max(1, GEN.items.length);
+  GEN.ss = src.items.some(it => it[4]);
+  GEN.tab = 'day';
+  GEN.date = null;
+  go('build');
+}
+function resetCreator() { Object.assign(GEN, { name: '', edit: null, groups: [], items: [], count: 6, date: null, ss: false }); }
 const creatorName = () => (GEN.groups.length ? GEN.groups.map(groupLabel).join(' + ') : t('gen.myWorkout'));
 
 function genCta() {
@@ -774,11 +890,13 @@ VIEWS.build = () => {
       <p class="muted small" style="margin:12px 0 0">${ic('info')} ${t('gen.basis', { l: t(`lvl.${lvl}`) })}</p></div>`;
     if (!GEN.groups.length && !n) return `${h}<div class="card empty small"><div class="big">${ic('dumbbell')}</div><p>${t('gen.pickFirst')}</p></div>`;
 
-    h += `<div class="card"><div class="row wrap"><h2 style="margin:0">${t('gen.selected')} <span class="muted small">· ${t('cal.exercises', { n })}</span></h2><span class="spacer"></span>
+    h += `<div class="card ${GEN.edit ? 'editing' : ''}">${GEN.edit ? `<div class="edit-banner">${ic('edit')} ${t('edit.title', { x: esc(GEN.name) })}</div>` : ''}
+      <label class="field" style="margin-bottom:10px"><span>${t('gen.name')}</span><input type="text" id="genName" value="${esc(GEN.name)}" placeholder="${esc(creatorName())}" maxlength="60"></label>
+      <div class="row wrap"><h2 style="margin:0">${t('gen.selected')} <span class="muted small">· ${t('cal.exercises', { n })}</span></h2><span class="spacer"></span>
         ${n ? `<button class="btn sm ghost" data-act="genClear">${ic('trash')} ${t('gen.clear')}</button>` : ''}</div>
       ${GEN.date ? `<p class="small" style="margin:8px 0 0"><span class="chip swap">${ic('calendar')} ${esc(fromKey(GEN.date).toLocaleDateString(LOC(), { weekday: 'long', day: 'numeric', month: 'short' }))}</span></p>` : ''}
       ${n ? GEN.items.map((it, i) => `<div class="sel-row">
-          <span class="sel-n">${i + 1}</span>${thumb(it[0], 48)}
+          <span class="sel-n ${ssLetter(i) ? 'ss' : ''}">${ssLetter(i) ? `${ssLetter(i)}${(i % 2) + 1}` : i + 1}</span>${thumb(it[0], 48)}
           <div class="sel-main"><b data-act="showEx" data-id="${esc(it[0])}">${esc(exName(it[0]))}</b>
             <div class="sel-edit">${it[5] ? `<span class="chip">${groupLabel(it[5])}</span>` : ''}
               <label><input type="number" inputmode="numeric" min="1" max="10" data-gi="${i}" data-gf="sets" value="${esc(it[1])}" aria-label="${t('sets')}"> ${t('sets')}</label>
@@ -790,7 +908,11 @@ VIEWS.build = () => {
             <button class="round-btn" data-act="genRemove" data-i="${i}" aria-label="${t('gen.remove')}">${ic('x')}</button></div></div>`).join('')
         : `<p class="muted small">${t('gen.hintPick')}</p>`}
       <button class="btn ghost big" data-act="genAddAny" style="margin-top:12px">${ic('plus')} ${t('gen.addAny')}</button>
-      ${n ? `<div class="row wrap" style="margin-top:14px;gap:8px">
+      ${GEN.edit ? `<div class="row wrap" style="margin-top:14px;gap:8px">
+        <button class="btn ghost" data-act="genCancelEdit">${ic('x')} ${t('edit.cancel')}</button>
+        ${GEN.edit.kind === 'routine' ? `<button class="btn ghost" data-act="genSave">${ic('plus')} ${t('edit.saveNew')}</button>` : ''}<span class="spacer"></span>
+        <button class="btn primary" data-act="genSaveEdit">${ic('check')} ${t('edit.save')}</button></div>`
+      : n ? `<div class="row wrap" style="margin-top:14px;gap:8px">
         <button class="btn ghost" data-act="genSave">${ic('save')} ${t('saveRoutine')}</button>
         <button class="btn ghost" data-act="genSchedule">${ic('calendar')} ${t('cal.schedule')}</button><span class="spacer"></span>
         <button class="btn primary" data-act="genStart">${ic('play', 'fill')} ${t('gen.start')}</button></div>` : ''}</div>`;
@@ -844,7 +966,7 @@ function addPlan(base, date, repeat) {
     S.plan.push({ id: uid(), date: k, kind: base.kind || 'workout', name: String(base.name || '').slice(0, 80), items: base.items || [], programId: base.programId || null, dayIdx: base.dayIdx ?? null });
   }
   save();
-  toast(dates.length > 1 ? t('cal.addedN', { n: dates.length }) : t('cal.added', { d: shortDay(date) }));
+  ok(dates.length > 1 ? t('cal.addedN', { n: dates.length }) : t('cal.added', { d: shortDay(date) }));
   return dates.length;
 }
 
@@ -936,7 +1058,8 @@ function viewPlan(id) {
   openModal(`<button class="close" data-act="close" aria-label="Close">${ic('x')}</button>
     <h2>${esc(p.name)}</h2><p class="muted">${esc(cap(fromKey(p.date).toLocaleDateString(LOC(), { weekday: 'long', day: 'numeric', month: 'long' })))} · ${t('cal.exercises', { n: p.items.length })}</p>
     ${p.items.map(programItem).join('')}
-    <div class="row wrap" style="margin-top:14px"><button class="btn danger" data-act="calDel" data-id="${p.id}">${ic('trash')} ${t('cal.del')}</button><span class="spacer"></span>
+    <div class="row wrap" style="margin-top:14px;gap:8px"><button class="btn danger" data-act="calDel" data-id="${p.id}">${ic('trash')} ${t('cal.del')}</button>
+      <button class="btn ghost" data-act="editPlan" data-id="${p.id}">${ic('edit')} ${t('edit')}</button><span class="spacer"></span>
       ${planDone(p) ? `<span class="chip good">${ic('check')} ${t('cal.doneLbl')}</span>` : `<button class="btn primary" data-act="calStart" data-id="${p.id}">${ic('play', 'fill')} ${t('start')}</button>`}</div>`);
 }
 
@@ -1063,8 +1186,8 @@ function openAlt(orig, ei = null) {
 }
 function applyAlt(id) {
   const orig = ALT.orig;
-  if (id === orig) { delete S.swaps[orig]; toast(t('alt.restored')); }
-  else { S.swaps[orig] = id; toast(t('alt.saved', { x: esc(exName(id)), y: esc(exName(orig)) })); }
+  if (id === orig) { delete S.swaps[orig]; ok(t('alt.restored')); }
+  else { S.swaps[orig] = id; ok(t('alt.saved', { x: esc(exName(id)), y: esc(exName(orig)) })); }
   if (ALT.ei != null && S.active) {
     const old = S.active.exercises[ALT.ei];
     pushExercise(id, { sets: old.sets.length, target: old.target, rest: old.rest, orig: id === orig ? null : orig }, ALT.ei);
@@ -1075,34 +1198,45 @@ function applyAlt(id) {
 }
 
 // ---- picker (add exercise to workout / pick any alternative)
-const PICK = { q: '', muscle: '', replace: null, alt: false, gen: false };
+const PICK = { q: '', group: '', equip: '', level: '', mine: true, replace: null, alt: false, gen: false };
 function openPicker({ replace = null, alt = false, gen = false } = {}) {
-  Object.assign(PICK, { q: '', muscle: '', replace, alt, gen });
+  Object.assign(PICK, { q: '', group: gen && GEN.groups.length === 1 ? GEN.groups[0] : '', equip: '', level: '', replace, alt, gen });
   openModal(`<button class="close" data-act="close" aria-label="Close">${ic('x')}</button>
     <h2>${gen ? t('gen.addAny') : alt || replace != null ? t('picker.replace') : t('picker.add')}</h2>
-    <input type="search" id="pickQ" placeholder="${t('picker.search', { n: EX.length })}">
-    <div class="chips" style="margin:10px 0">${['', ...sortBy(MUSCLES, T)].map(m => `<button class="chip" data-act="pickMuscle" data-m="${esc(m)}">${m ? esc(T(m)) : t('all')}</button>`).join('')}</div>
+    <div class="search-box">${ic('search')}<input type="search" id="pickQ" placeholder="${t('picker.search', { n: EX.length })}" autocomplete="off"></div>
+    <div class="chips pick-groups">${['', ...Object.keys(GROUPS)].map(g => `<button class="chip ${PICK.group === g ? 'on' : ''}" data-act="pickGroup" data-g="${g}">${g ? groupLabel(g) : t('all')}</button>`).join('')}</div>
+    <div class="row wrap pick-filters">
+      <select data-pick="equip" aria-label="${t('allEquip')}">${opt('', t('allEquip'), '')}${sortBy(EQUIP, T).map(m => opt(m, T(m), '')).join('')}</select>
+      <select data-pick="level" aria-label="${t('allLevels')}">${opt('', t('allLevels'), '')}${Object.keys(LEVEL_ICONS).map(m => opt(m, T(m), '')).join('')}</select>
+      <label class="switch small"><input type="checkbox" id="pickMine" ${PICK.mine ? 'checked' : ''}><i></i><span>${t('pick.mine')}</span></label>
+    </div>
+    <p class="muted small" id="pickCount"></p>
     <div id="pickList"></div>`);
   renderPick();
   $('#pickQ').focus();
 }
 function renderPick() {
   const ws = words(PICK.q);
-  let res = EX.filter(e => (!PICK.muscle || e.primaryMuscles.includes(PICK.muscle)) && (!ws.length || ws.every(w => haystack(e).includes(w))));
+  let res = EX.filter(e => (!PICK.group || GROUPS[PICK.group].m.some(m => e.primaryMuscles.includes(m)))
+    && (!PICK.equip || e.equipment === PICK.equip) && (!PICK.level || e.level === PICK.level)
+    && (!PICK.mine || hasEquip(e.equipment)) && (!ws.length || ws.every(w => haystack(e).includes(w))));
   if (!ws.length) {
     const recent = [...new Set(sortedWorkouts().reverse().flatMap(w => w.exercises.map(e => e.id)))];
     const rank = id => (S.favorites.includes(id) ? 0 : recent.includes(id) ? 1 + recent.indexOf(id) / 1000 : 2);
     res = res.sort((a, b) => rank(a.id) - rank(b.id));
   }
-  $$('[data-act=pickMuscle]').forEach(b => b.classList.toggle('on', b.dataset.m === PICK.muscle));
-  $('#pickList').innerHTML = res.slice(0, 60).map(e => `<div class="hist-item" data-act="pickEx" data-id="${esc(e.id)}">${thumb(e.id, 56)}
+  $$('[data-act=pickGroup]').forEach(b => b.classList.toggle('on', b.dataset.g === PICK.group));
+  $('#pickCount').textContent = res.length === 1 ? t('result1') : t('results', { n: res.length });
+  const inList = new Set(PICK.gen ? GEN.items.map(it => it[0]) : []);
+  $('#pickList').innerHTML = res.slice(0, 60).map(e => `<div class="hist-item ${inList.has(e.id) ? 'in' : ''}" data-act="pickEx" data-id="${esc(e.id)}">${thumb(e.id, 56)}
     <div style="flex:1;min-width:0"><b>${esc(exName(e.id))}</b><div class="muted small">${esc(list(e.primaryMuscles))} · ${esc(e.equipment ? T(e.equipment) : cap(t('noEquip')))}</div></div>
-    ${levelChip(e.level)}</div>`).join('') || `<div class="empty">${t('noMatches')}</div>`;
+    ${inList.has(e.id) ? `<span class="chip good">${ic('check')}</span>` : levelChip(e.level)}</div>`).join('') || `<div class="empty"><div class="big">${ic('search')}</div><p>${t('noMatches')}</p></div>`;
+  stagger($('#pickList'), 10);
 }
 
 // ============================================================ WORKOUT
-function startWorkout({ name = 'Workout', items = [], programId = null, dayIdx = null, planId = null } = {}) {
-  if (S.active && !confirm(t('wo.inProgressConfirm'))) return;
+async function startWorkout({ name = 'Workout', items = [], programId = null, dayIdx = null, planId = null } = {}) {
+  if (S.active && !(await ask({ msg: t('wo.inProgressConfirm'), ok: t('discard'), danger: true }))) return;
   S.active = { id: uid(), name, start: Date.now(), programId, dayIdx, planId, note: '', exercises: [] };
   for (const it of items) {
     const r = resolve(it[0]);
@@ -1111,6 +1245,7 @@ function startWorkout({ name = 'Workout', items = [], programId = null, dayIdx =
   save();
   stopRest();
   go('workout');
+  ok(t('wo.started'));
 }
 
 function pushExercise(id, { sets = 3, target = '', rest = S.profile.rest, orig = null, ss = null } = {}, at = null) {
@@ -1215,10 +1350,10 @@ function checkPR(ei, si) {
   }
 }
 
-function finishWorkout() {
+async function finishWorkout() {
   const a = S.active;
   if (!setsDone(a)) {
-    if (confirm(t('noSetsDiscard'))) { S.active = null; save(); stopRest(); render(); }
+    if (await ask({ msg: t('noSetsDiscard'), ok: t('discard'), danger: true })) { S.active = null; save(); stopRest(); render(); toast(t('wo.discarded')); }
     return;
   }
   a.exercises = a.exercises.map(e => ({ ...e, sets: e.sets.filter(s => s.done) })).filter(e => e.sets.length);
@@ -1501,7 +1636,7 @@ function mergeDocs(a, b) {
 async function syncNow(quiet = false) {
   const name = S.profile.syncName;
   if (!SERVER) return;
-  if (!name) { if (!quiet) toast(t('sync.needName')); return; }
+  if (!name) { if (!quiet) warn(t('sync.needName')); return; }
   const url = `api/profiles/${encodeURIComponent(name)}`;
   try {
     const r = await fetch(url);
@@ -1519,11 +1654,11 @@ async function syncNow(quiet = false) {
     applyTheme();
     const info = $('#syncInfo');
     if (info) info.textContent = t('sync.last', { t: new Date().toLocaleTimeString(LOC()) });
-    if (!quiet) toast(t('sync.ok', { n: esc(name), w: S.workouts.length }));
+    if (!quiet) ok(t('sync.ok', { n: esc(name), w: S.workouts.length }));
     // avoid stealing focus mid-typing during auto-sync
     if (changed && !(quiet && document.activeElement?.matches('input,textarea'))) render();
   } catch (err) {
-    if (!quiet) toast(t('sync.fail', { e: esc(err.message) }));
+    if (!quiet) fail(t('sync.fail', { e: esc(err.message) }));
   }
 }
 
@@ -1559,7 +1694,12 @@ const ACT = {
     fillToCount();
     render();
   },
-  genCount: el => { GEN.count = Math.min(15, Math.max(1, GEN.count + +el.dataset.d)); fillToCount(); render(); },
+  genCount: el => {
+    const next = GEN.count + +el.dataset.d;
+    if (next > 15) return warn(t('gen.max'));
+    GEN.count = Math.max(1, next); fillToCount(); render();
+    const b = $('.stepper b'); b?.classList.add('bump');
+  },
   genGoal: el => {
     GEN.goal = el.dataset.v;
     GEN.items = GEN.items.map(it => (EXMAP[it[0]] ? itemFor(EXMAP[it[0]], it[5], it[6]) : it));
@@ -1567,7 +1707,8 @@ const ACT = {
   },
   genToggle: el => {
     const id = el.dataset.id, i = GEN.items.findIndex(it => it[0] === id);
-    if (i >= 0) GEN.items.splice(i, 1); else GEN.items.push(itemFor(EXMAP[id], el.dataset.g, false));
+    if (i >= 0) { GEN.items.splice(i, 1); toast(t('gen.removedEx', { x: esc(exName(id)) }), 'info', { ms: 1600 }); }
+    else { GEN.items.push(itemFor(EXMAP[id], el.dataset.g, false)); ok(t('gen.added', { x: esc(exName(id)) }), { ms: 1600 }); }
     GEN.count = Math.max(1, GEN.items.length);
     render();
   },
@@ -1582,7 +1723,7 @@ const ACT = {
     GEN.items[i] = [e.id, it[1], it[2], it[3], null, it[5], false];
     render();
   },
-  genRemove: el => { GEN.items.splice(+el.dataset.i, 1); GEN.count = Math.max(1, GEN.items.length); render(); },
+  genRemove: el => outThen(el, () => { const [it] = GEN.items.splice(+el.dataset.i, 1); GEN.count = Math.max(1, GEN.items.length); render(); toast(t('gen.removedEx', { x: esc(exName(it[0])) }), 'info', { ms: 1600 }); }),
   genMove: el => {
     const i = +el.dataset.i, j = i + +el.dataset.d;
     [GEN.items[i], GEN.items[j]] = [GEN.items[j], GEN.items[i]];
@@ -1592,15 +1733,29 @@ const ACT = {
   genAddAny: () => openPicker({ gen: true }),
   genStart: () => {
     if (!GEN.items.length) return;
-    startWorkout({ name: creatorName(), items: finalItems() });
+    startWorkout({ name: genTitle(), items: finalItems() });
   },
   genSave: () => {
-    const name = prompt(t('routine.name'), creatorName());
-    if (!name) return;
-    S.routines.push({ id: uid(), name: name.slice(0, 60), items: finalItems() });
-    save(); toast(t('routine.saved'));
+    if (!GEN.items.length) return warn(t('gen.hintPick'));
+    const name = genTitle().slice(0, 60);
+    S.routines.push({ id: uid(), name, items: finalItems() });
+    save(); popDone(t('routine.saved'), esc(name));
+    if (GEN.edit) { resetCreator(); go('programs'); }
   },
-  genSchedule: () => openSchedule({ name: creatorName(), items: finalItems() }, GEN.date),
+  genSaveEdit: () => {
+    if (!GEN.items.length) return warn(t('gen.hintPick'));
+    const { kind, id } = GEN.edit;
+    const target = kind === 'routine' ? S.routines.find(r => r.id === id) : S.plan.find(p => p.id === id);
+    if (!target) { resetCreator(); return fail(t('edit.gone')); }
+    target.name = genTitle().slice(0, 80);
+    target.items = finalItems();
+    save();
+    popDone(t('edit.saved'), esc(target.name));
+    resetCreator();
+    if (kind === 'routine') go('programs'); else { const d = fromKey(target.date); Object.assign(CAL, { y: d.getFullYear(), m: d.getMonth(), sel: target.date }); go('calendar'); }
+  },
+  genCancelEdit: () => { const back = GEN.edit?.kind === 'plan' ? 'calendar' : 'programs'; resetCreator(); go(back); },
+  genSchedule: () => openSchedule({ name: genTitle(), items: finalItems() }, GEN.date),
 
   // calendar
   calSel: el => {
@@ -1642,9 +1797,9 @@ const ACT = {
     addPlan({ name: `${L(p.name)} — ${L(p.days[di].name)}`, items: p.days[di].items, programId: p.id, dayIdx: di }, CAL.sel || todayKey(), CAL.repeat);
     closeModal(); render();
   },
-  calNote: () => {
-    const text = prompt(t('cal.note.ph'));
-    if (!text || !text.trim()) return;
+  calNote: async () => {
+    const text = await ask({ title: t('note.title'), input: true, placeholder: t('cal.note.ph'), ok: t('saved') });
+    if (!text) return;
     addPlan({ kind: 'note', name: text.trim() }, CAL.sel || todayKey(), CAL.repeat);
     render();
   },
@@ -1653,12 +1808,13 @@ const ACT = {
     if (p) startWorkout({ name: p.name, items: p.items, programId: p.programId, dayIdx: p.dayIdx, planId: p.id });
   },
   calView: el => viewPlan(el.dataset.id),
-  calDel: el => {
+  calDel: el => outThen(el, () => undoable(t('del.plan'), () => {
     S.plan = S.plan.filter(p => p.id !== el.dataset.id);
     S.deleted.push(el.dataset.id);
     save(); closeModal(); render();
-  },
+  })),
   schedConfirm: () => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test($('#schedDate').value)) return shake($('#schedDate'));
     const date = $('#schedDate').value;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !SCHED) return;
     addPlan(SCHED, date, $('#schedRepeat').checked);
@@ -1666,6 +1822,7 @@ const ACT = {
     Object.assign(CAL, { y: d.getFullYear(), m: d.getMonth(), sel: date });
     GEN.date = null;
     go('calendar');
+    popDone(t('sched.done'), esc(SCHED.name));
   },
   weekDays: el => {
     const n = +el.dataset.v;
@@ -1681,7 +1838,7 @@ const ACT = {
   },
   weekCreate: () => {
     const empty = GEN.days.findIndex(d => !d.length);
-    if (empty >= 0) return toast(t('week.emptyDay', { n: empty + 1 }));
+    if (empty >= 0) return warn(t('week.emptyDay', { n: empty + 1 }));
     const n = GEN.days.length;
     const both = key => ({ en: I18N.en[key], es: I18N.es[key] });
     const prog = {
@@ -1696,22 +1853,21 @@ const ACT = {
     S.myPrograms.push(prog);
     S.program = { id: prog.id, next: 0 };
     save();
-    toast(t('week.created'));
+    popDone(t('week.created'), esc(L(prog.name)));
     go('programs');
     setTimeout(() => showProgram(prog.id), 300);
   },
-  delProgram: el => {
-    if (!confirm(t('delProgram.confirm'))) return;
+  delProgram: el => undoable(t('del.program'), () => {
     S.myPrograms = S.myPrograms.filter(p => p.id !== el.dataset.id);
     if (S.program.id === el.dataset.id) S.program = { id: null, next: 0 };
     save(); openProgramId = null; closeModal(); render();
-  },
+  }),
   toggleTheme: el => withReveal(el, () => { S.profile.theme = resolvedTheme() === 'dark' ? 'light' : 'dark'; save(); applyTheme(); if (location.hash === '#settings') render(); }),
   toggleLang: () => { S.profile.lang = LANG() === 'es' ? 'en' : 'es'; save(); applyStaticI18n(); closeModal(); render({ animate: true }); },
   setLevel: el => {
     const k = el.dataset.level;
     S.profile.level = k; PRG.level = null; save();
-    toast(t('lvl.set', { icon: ic(LEVEL_ICONS[k]), level: t(`lvl.${k}`) }));
+    ok(t('lvl.set', { icon: ic(LEVEL_ICONS[k]), level: t(`lvl.${k}`) }));
     render();
   },
   prgLevel: el => { PRG.level = el.dataset.level; render({ animate: true }); },
@@ -1720,7 +1876,7 @@ const ACT = {
     const p = findProgram(x => x.id === el.dataset.id);
     S.program = { id: p.id, next: 0 };
     if (!S.profile.level) S.profile.level = p.level;
-    save(); toast(t('following.toast', { p: esc(L(p.name)) })); showProgram(p.id); render();
+    save(); ok(t('following.toast', { p: esc(L(p.name)) })); showProgram(p.id); render();
   },
   startDay: el => {
     const p = findProgram(x => x.id === el.dataset.prog), di = +el.dataset.day;
@@ -1729,13 +1885,15 @@ const ACT = {
   },
   startEmpty: () => startWorkout({ name: cap(woName()) }),
   startRoutine: el => { const r = S.routines.find(x => x.id === el.dataset.id); startWorkout({ name: r.name, items: r.items }); },
-  delRoutine: el => { if (confirm(t('delRoutine.confirm'))) { S.deleted.push(el.dataset.id); S.routines = S.routines.filter(x => x.id !== el.dataset.id); save(); render(); } },
-  saveRoutine: el => {
+  delRoutine: el => outThen(el, () => undoable(t('del.routine'), () => { S.deleted.push(el.dataset.id); S.routines = S.routines.filter(x => x.id !== el.dataset.id); save(); render(); })),
+  editRoutine: el => loadForEdit('routine', el.dataset.id),
+  editPlan: el => loadForEdit('plan', el.dataset.id),
+  saveRoutine: async el => {
     const w = S.workouts.find(x => x.id === el.dataset.id);
-    const name = prompt(t('routine.name'), w.name);
+    const name = await ask({ title: t('saveRoutine'), msg: t('routine.name'), input: true, value: w.name, ok: t('saved') });
     if (!name) return;
     S.routines.push({ id: uid(), name: name.slice(0, 60), items: itemsFrom(w) });
-    save(); toast(t('routine.saved')); render();
+    save(); closeModal(); render(); popDone(t('routine.saved'), esc(name));
   },
   repeat: el => { const w = S.workouts.find(x => x.id === el.dataset.id); startWorkout({ name: w.name, items: itemsFrom(w), programId: w.programId, dayIdx: w.dayIdx }); },
   startWith: el => startWorkout({ name: t('session', { x: exName(el.dataset.id) }), items: [[el.dataset.id, 3, '', S.profile.rest]] }),
@@ -1748,19 +1906,20 @@ const ACT = {
     const id = el.dataset.id;
     S.favorites = S.favorites.includes(id) ? S.favorites.filter(x => x !== id) : [...S.favorites, id];
     save(); el.innerHTML = S.favorites.includes(id) ? `${ic('star', 'fill gold')} ${t('faved')}` : `${ic('star')} ${t('fav')}`;
+    S.favorites.includes(id) ? ok(t('fav.added')) : toast(t('fav.removed'));
     if (location.hash === '#library') renderGrid(false);
   },
   demoToggle: el => {
     if (demoTimer) { clearInterval(demoTimer); demoTimer = null; el.innerHTML = `${ic('play', 'fill')} ${t('play')}`; return; }
     startDemo(); el.innerHTML = `${ic('pause', 'fill')} ${t('pause')}`;
   },
-  addEx: el => { pushExercise(el.dataset.id); save(); closeModal(); go('workout'); toast(t('added', { x: esc(exName(el.dataset.id)) })); },
+  addEx: el => { pushExercise(el.dataset.id); save(); closeModal(); go('workout'); ok(t('added', { x: esc(exName(el.dataset.id)) })); },
   openPicker: () => openPicker(),
-  pickMuscle: el => { PICK.muscle = el.dataset.m; renderPick(); },
+  pickGroup: el => { PICK.group = el.dataset.g; renderPick(); },
   pickEx: el => {
     const id = el.dataset.id;
     if (PICK.alt) return applyAlt(id);
-    if (PICK.gen) { GEN.items.push(itemFor(EXMAP[id], groupOf(id), false)); GEN.count = GEN.items.length; closeModal(); return render(); }
+    if (PICK.gen) { GEN.items.push(itemFor(EXMAP[id], groupOf(id), false)); GEN.count = GEN.items.length; closeModal(); render(); return ok(t('gen.added', { x: esc(exName(id)) })); }
     if (!S.active) { closeModal(); return startWorkout({ name: t('session', { x: exName(id) }), items: [[id, 3, '', S.profile.rest]] }); }
     if (PICK.replace != null) { const old = S.active.exercises[PICK.replace]; pushExercise(id, { sets: old.sets.length, target: old.target, rest: old.rest }, PICK.replace); }
     else pushExercise(id);
@@ -1775,17 +1934,18 @@ const ACT = {
   },
   altPick: el => applyAlt(el.dataset.id),
   altAny: () => { const keepProg = openProgramId; openPicker({ alt: true }); openProgramId = keepProg; },
-  unswap: el => { delete S.swaps[el.dataset.orig]; save(); toast(t('alt.restored')); render(); },
+  unswap: el => { delete S.swaps[el.dataset.orig]; save(); ok(t('alt.restored')); render(); },
   toggleEquip: el => {
     const v = el.dataset.v;
     S.noEquip = S.noEquip.includes(v) ? S.noEquip.filter(x => x !== v) : [...S.noEquip, v];
     save(); render();
+    S.noEquip.includes(v) ? toast(t('equip.off', { x: esc(T(v)) })) : ok(t('equip.on', { x: esc(T(v)) }));
   },
 
   toggleSet: el => {
     const ei = +el.dataset.e, si = +el.dataset.s, e = S.active.exercises[ei], s = e.sets[si];
     if (!s.done) {
-      if (!(s.r > 0)) { toast(t('enterReps')); return; }
+      if (!(s.r > 0)) { warn(t('enterReps')); shake(el.closest('tr')?.querySelector('[data-f=r]')); return; }
       if (s.w == null) s.w = 0;
       s.done = true;
       checkPR(ei, si);
@@ -1801,6 +1961,12 @@ const ACT = {
     save();
     JUST = s.done ? [ei, si] : null;
     render();
+    if (s.done && e.sets.every(x => x.done)) {
+      const card = $$('.wo-ex')[ei];
+      card?.classList.add('complete');
+      if (S.active.exercises.every(x => x.sets.every(y => y.done))) ok(t('wo.allDone'), { ms: 4000 });
+      else ok(t('ex.complete', { x: esc(exName(e.id)) }));
+    }
   },
   setType: el => {
     const s = S.active.exercises[+el.dataset.e].sets[+el.dataset.s];
@@ -1834,25 +2000,24 @@ const ACT = {
     [xs[i], xs[j]] = [xs[j], xs[i]];
     save(); closeModal(); render();
   },
-  restEx: el => { S.active.exercises[+el.dataset.e].rest = +el.dataset.v; save(); closeModal(); render(); },
-  rmEx: el => { S.active.exercises.splice(+el.dataset.e, 1); save(); closeModal(); render(); },
-  cancelWo: () => { if (confirm(t('discardConfirm'))) { S.active = null; save(); stopRest(); render(); } },
+  restEx: el => { S.active.exercises[+el.dataset.e].rest = +el.dataset.v; save(); closeModal(); render(); ok(t('rest.set', { x: mmss(+el.dataset.v) })); },
+  rmEx: el => undoable(t('del.exercise'), () => { S.active.exercises.splice(+el.dataset.e, 1); save(); closeModal(); render(); }),
+  cancelWo: () => undoable(t('wo.discarded'), () => { S.active = null; save(); stopRest(); render(); }),
   finishWo: finishWorkout,
   showWorkout: el => showWorkout(el.dataset.id),
-  delWorkout: el => {
-    if (!confirm(t('delWoConfirm'))) return;
+  delWorkout: el => undoable(t('del.workout'), () => {
     S.workouts = S.workouts.filter(w => w.id !== el.dataset.id);
     S.deleted.push(el.dataset.id);
     save(); closeModal(); render();
-  },
+  }),
   histAll: () => { PROG.all = true; render(); },
   addBw: () => {
     const v = parseFloat($('#bwIn').value);
-    if (!(v > 0)) return toast(t('bw.enter'));
+    if (!(v > 0)) { shake($('#bwIn')); return warn(t('bw.enter')); }
     const kg = fromD(v);
     S.bodylog.push({ id: uid(), t: Date.now(), kg });
     S.profile.bodyweight = kg;
-    save(); toast(t('bw.logged')); render();
+    save(); ok(t('bw.logged')); render();
   },
   undoBw: () => {
     const last = [...S.bodylog].sort((a, b) => a.t - b.t).pop();
@@ -1866,15 +2031,15 @@ const ACT = {
     const apply = () => {
       S.profile[k] = k === 'rest' ? +v : v;
       save(); applyStaticI18n(); render({ animate: k === 'lang' });
+      ok(k === 'lang' ? t('lang.set') : t('settings.saved'));
     };
     if (k === 'theme') withReveal(el, apply); else apply();
   },
   pickProfile: el => { S.profile.syncName = el.dataset.v; save(); render(); },
   syncNow: () => syncNow(false),
-  export: exportData,
-  reset: () => {
-    if (!confirm(t('reset.c1'))) return;
-    if (!confirm(t('reset.c2'))) return;
+  export: () => { exportData(); ok(t('export.ok')); },
+  reset: async () => {
+    if (!(await ask({ msg: `${t('reset.c1')}\n${t('reset.c2')}`, ok: t('reset'), danger: true }))) return;
     localStorage.removeItem(KEY); S = DEFAULTS(); applyStaticI18n(); stopRest(); go('home');
   },
 };
@@ -1904,6 +2069,7 @@ document.addEventListener('input', ev => {
     return;
   }
   if (el.dataset.gi != null) { const it = GEN.items[+el.dataset.gi]; if (it) it[el.dataset.gf === 'sets' ? 1 : 2] = el.value; return; }
+  if (el.id === 'genName') { GEN.name = el.value; return; }
   if (el.id === 'woName' && S.active) { S.active.name = el.value; persist(); return; }
   if (el.id === 'woNote' && S.active) { S.active.note = el.value; persist(); return; }
   if (el.id === 'libQ') { LIB.q = el.value; LIB.limit = 48; renderGrid(false); return; }
@@ -1927,8 +2093,10 @@ document.addEventListener('change', ev => {
   }
   if (el.id === 'woName' || el.id === 'woNote') { save(); return; }
   if (el.dataset.lib) { LIB[el.dataset.lib] = el.value; LIB.limit = 48; renderGrid(); return; }
+  if (el.dataset.pick) { PICK[el.dataset.pick] = el.value; renderPick(); return; }
+  if (el.id === 'pickMine') { PICK.mine = el.checked; renderPick(); return; }
   if (el.id === 'progEx') { PROG.ex = el.value; render(); return; }
-  if (el.id === 'genSS') { GEN.ss = el.checked; return; }
+  if (el.id === 'genSS') { GEN.ss = el.checked; if (GEN.ss) interleaveGroups(); render(); return; }
   if (el.id === 'calRepeat') { CAL.repeat = el.checked; return; }
   if (el.dataset.pref) {
     const k = el.dataset.pref;
@@ -1939,18 +2107,20 @@ document.addEventListener('change', ev => {
     return;
   }
   if (el.id === 'importFile' && el.files[0]) {
-    el.files[0].text().then(txt => {
+    el.files[0].text().then(async txt => {
       const doc = JSON.parse(txt);
       if (!doc || !Array.isArray(doc.workouts)) throw new Error(t('import.bad'));
-      const replace = confirm(t('import.confirm', { n: doc.workouts.length }));
-      S = replace ? hydrate(doc) : mergeDocs(S, hydrate(doc));
-      save(); applyStaticI18n(); toast(t('import.ok')); render();
-    }).catch(err => toast(t('import.fail', { e: esc(err.message) })));
+      const how = await ask({ title: t('import'), msg: t('import.ask', { n: doc.workouts.length }), choices: [{ label: t('import.merge'), value: 'merge' }, { label: t('import.replace'), value: 'replace' }] });
+      el.value = '';
+      if (!how) return;
+      S = how === 'replace' ? hydrate(doc) : mergeDocs(S, hydrate(doc));
+      save(); applyStaticI18n(); render(); popDone(t('import.ok'));
+    }).catch(err => fail(t('import.fail', { e: esc(err.message) })));
   }
 });
 
 document.addEventListener('keydown', ev => {
-  if (ev.key === 'Escape') { openProgramId = null; closeModal(); }
+  if (ev.key === 'Escape' && !$('#dialog')) { openProgramId = null; closeModal(); }
   if (ev.key === 'Enter' && ev.target.dataset?.f) ev.target.blur();
 });
 
@@ -1970,7 +2140,7 @@ const isStandalone = () => matchMedia('(display-mode: standalone)').matches || n
 const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 let installPrompt = null;
 window.addEventListener('beforeinstallprompt', ev => { ev.preventDefault(); installPrompt = ev; if (['#home', '', '#settings'].includes(location.hash)) render(); });
-window.addEventListener('appinstalled', () => { installPrompt = null; toast(t('install.done')); render(); });
+window.addEventListener('appinstalled', () => { installPrompt = null; ok(t('install.done')); render(); });
 
 function installCard({ dismissible = false } = {}) {
   if (isStandalone()) return '';
