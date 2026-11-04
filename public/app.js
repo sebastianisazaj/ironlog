@@ -325,7 +325,7 @@ function shake(el) {
 }
 // Animate a row/card out, then run the state change
 function outThen(el, fn) {
-  const row = el?.closest('.sel-row, .hist-item, .card, .wo-ex');
+  const row = el?.closest('.sel-row, .routine-card, .rt-mini, .hist-item, .card, .wo-ex');
   if (!row || reducedMotion()) return fn();
   row.classList.add('leaving');
   setTimeout(fn, 230);
@@ -544,8 +544,10 @@ function render({ animate = false } = {}) {
     countUp(view);
     window.scrollTo(0, 0);
   }
-  const tab = v === 'build' ? 'programs' : v;
+  const tab = ['build', 'programs'].includes(v) ? 'workout' : v;
   $$('.tabbar button').forEach(b => b.classList.toggle('on', b.dataset.go === tab));
+  const center = $('.tabbar .center');
+  if (center) { center.classList.toggle('live', !!S.active); $('#centerLbl').textContent = t(S.active ? 'nav.training' : 'nav.routines'); }
   moveInd();
   lastView = v;
   JUST = null;
@@ -555,7 +557,7 @@ window.addEventListener('hashchange', () => { openProgramId = null; closeModal()
 
 function moveInd() {
   const b = $('.tabbar button.on'), ind = $('#tabInd');
-  if (!b) { ind.style.opacity = 0; return; }
+  if (!b || b.classList.contains('center')) { ind.style.opacity = 0; return; }
   ind.style.opacity = 1;
   ind.style.width = `${b.offsetWidth}px`;
   ind.style.height = `${b.offsetHeight}px`;
@@ -576,84 +578,195 @@ function levelPicker(title = t('level.choose')) {
 }
 
 VIEWS.home = () => {
-  const p = S.profile, st = stats(), rk = rankOf(st.xp);
-  const hour = new Date().getHours();
-  const greet = t(hour < 12 ? 'greet.morning' : hour < 18 ? 'greet.afternoon' : 'greet.evening');
-  let h = `<div class="card hero">
-    <div class="muted small">${greet}${p.name ? `, ${esc(p.name)}` : ''} ${p.level ? `· <b>${ic(LEVEL_ICONS[p.level])} ${t(`lvl.${p.level}`)}</b>` : ''}</div>
-    <h1 style="margin-top:6px">${ic(rk.cur.icon)} ${L(rk.cur.name)}</h1>
-    <div class="xpbar"><i style="width:${rk.pct}%"></i></div>
-    <div class="small muted">${cnt(st.xp)} XP${rk.nxt ? ` · ${t('xp.toNext', { xp: (rk.nxt.xp - st.xp).toLocaleString(LOC()), rank: `${ic(rk.nxt.icon)} ${L(rk.nxt.name)}` })}` : ` · ${t('xp.max')}`}</div>
-  </div>`;
+  const p = S.profile, st = stats(), rk = rankOf(st.xp), now = new Date();
+  const greet = t(now.getHours() < 12 ? 'greet.morning' : now.getHours() < 18 ? 'greet.afternoon' : 'greet.evening');
+  let h = `<div class="home-head"><div style="min-width:0"><div class="muted small">${esc(cap(now.toLocaleDateString(LOC(), { weekday: 'long', day: 'numeric', month: 'long' })))}</div>
+      <h1 style="margin:2px 0 0">${greet}${p.name ? `, ${esc(p.name)}` : ''}</h1></div>
+    <button class="rank-pill" data-go="progress" title="${st.xp.toLocaleString(LOC())} XP">${ic(rk.cur.icon)}<span>${L(rk.cur.name)}</span><i style="--p:${rk.pct.toFixed(0)}%"></i></button></div>`;
 
   if (!p.level) h += levelPicker(t('level.welcome'));
   h += installCard({ dismissible: true });
-  const todays = plansOn(todayKey()).filter(p => p.kind === 'note' || !planDone(p));
-  if (todays.length && !S.active) {
-    const next = todays.find(p => p.kind !== 'note');
-    h += `<div class="card"><div class="row"><span class="install-ic">${ic('calendar')}</span>
-      <div style="flex:1;min-width:0"><b>${t('cal.todayPlan')}</b><div class="muted small">${todays.map(p => esc(p.name)).join(' · ')}</div></div>
-      <button class="round-btn" data-go="calendar" aria-label="${t('nav.calendar')}">${ic('arrowRight')}</button></div>
-      ${next ? `<button class="btn primary big" data-act="calStart" data-id="${next.id}" style="margin-top:12px">${ic('play', 'fill')} ${t('startX', { x: esc(next.name) })}</button>` : ''}</div>`;
-  }
-  if (!S.active) h += genCta();
+  h += todayCard();
 
-  if (S.active) {
-    h += `<div class="card row"><div><b>${ic('dumbbell')} ${t('active.title')}</b><div class="muted small">${esc(S.active.name)} · ${t('active.since', { t: dur(Date.now() - S.active.start) })}</div></div>
-      <span class="spacer"></span><button class="btn primary" data-go="workout">${t('resume')}</button></div>`;
-  }
+  const routines = sortedRoutines();
+  h += `<div class="section-head"><h2>${t('rt.mine')}</h2>${routines.length ? `<button class="link-btn" data-go="workout">${t('rt.seeAll')} ${ic('arrowRight')}</button>` : ''}</div>`;
+  h += routines.length
+    ? `<div class="rt-strip">${routines.slice(0, 6).map(r => routineCard(r, { compact: true })).join('')}
+        <button class="rt-new" data-act="newRoutine">${ic('plus')}<span>${t('rt.new')}</span></button></div>`
+    : `<div class="card rt-empty"><b>${t('rt.empty.title')}</b><p class="muted small">${t('rt.empty.sub')}</p>
+        <button class="btn primary" data-act="newRoutine">${ic('plus')} ${t('rt.new')}</button></div>`;
 
-  const prog = findProgram(x => x.id === S.program.id);
-  if (prog) {
-    const di = S.program.next % prog.days.length, day = prog.days[di];
-    h += `<div class="card"><div class="row"><div><div class="muted small">${t('next.up', { prog: esc(L(prog.name)) })}</div><h2 style="margin:2px 0 0">${esc(L(day.name))}</h2></div>
-      <span class="spacer"></span>${levelChip(prog.level)}</div>
-      <div class="row wrap" style="margin:12px 0">${day.items.map(it => { const r = resolve(it[0]); return `<span class="chip ${r.why ? 'swap' : ''}" title="${it[1]} × ${esc(it[2])}">${r.why ? `${ic('swap')} ` : ''}${esc(exName(r.id))}</span>`; }).join('')}</div>
-      <button class="btn primary big" data-act="startDay" data-prog="${prog.id}" data-day="${di}">${ic('play', 'fill')} ${t('startX', { x: esc(L(day.name)) })}</button></div>`;
-  } else {
-    h += `<div class="card"><h2>${t('ready.title')}</h2><p class="muted small">${t('ready.sub')}</p>
-      <div class="row wrap"><button class="btn primary" data-go="programs">${ic('programs')} ${t('pickProgram')}</button><button class="btn ghost" data-act="startEmpty">${t('quickStart')}</button></div></div>`;
-  }
+  h += weekCard(st);
 
-  const wk = weekStart(Date.now());
-  const thisWeek = S.workouts.filter(w => w.start >= wk);
-  h += `<div class="grid stats" style="margin-bottom:14px">
-    ${stat(cnt(thisWeek.length), t('stat.workoutsWeek'))}
-    ${stat(`${cnt(toD(thisWeek.reduce((v, w) => v + volumeOf(w), 0)), 'vol')}<small class="muted"> ${U()}</small>`, t('stat.volumeWeek'))}
-    ${stat(`${cnt(st.weekStreak)} ${ic('flame', 'acc')}`, t('stat.streak'))}
-    ${stat(`${cnt(st.prs)} ${ic('trophy', 'gold')}`, t('stat.prs'))}
-  </div>`;
-
-  const prs = recentPRs();
+  const prs = recentPRs(3);
   if (prs.length) {
-    h += `<div class="card"><div class="row"><h2>${t('recentPRs')}</h2><span class="spacer"></span><button class="btn sm ghost" data-go="progress">${t('allRecords')} ${ic('arrowRight')}</button></div>
-      ${prs.map(r => `<div class="hist-item" data-act="showEx" data-id="${esc(r.id)}">${thumb(r.id, 48)}<div style="flex:1"><b>${esc(exName(r.id))}</b>
-        <div class="muted small">${r.kinds.map(prLabel).join(' · ')} · ${fmtDate(r.t)}</div></div><b>${r.w ? `${fmtW(r.w)} × ${r.r}` : `${r.r} ${t('reps')}`}</b></div>`).join('')}</div>`;
+    h += `<div class="section-head"><h2>${t('recentPRs')}</h2><button class="link-btn" data-go="progress">${t('allRecords')} ${ic('arrowRight')}</button></div>
+      <div class="card tight">${prs.map(r => `<div class="hist-item" data-act="showEx" data-id="${esc(r.id)}">${thumb(r.id, 44)}<div style="flex:1;min-width:0"><b>${esc(exName(r.id))}</b>
+        <div class="muted small">${r.kinds.map(prLabel).join(' · ')} · ${relDay(r.t)}</div></div><b class="pr-val">${ic('trophy', 'gold')} ${r.w ? `${fmtW(r.w)} × ${r.r}` : `${r.r} ${t('reps')}`}</b></div>`).join('')}</div>`;
   }
 
-  const qs = QUOTES[LANG()];
-  h += `<p class="muted small" style="text-align:center;margin-top:24px">“${qs[new Date().getDate() % qs.length]}”</p>`;
+  const last = sortedWorkouts().pop();
+  if (last) {
+    h += `<div class="section-head"><h2>${t('home.last')}</h2></div>
+      <div class="card tight"><div class="hist-item" data-act="showWorkout" data-id="${last.id}">${mosaic(last.exercises.map(e => [e.id]), 'sm')}
+        <div style="flex:1;min-width:0"><b>${esc(last.name)}</b><div class="muted small">${relDay(last.start)} · ${t('hist.line', { e: last.exercises.length, s: setsDone(last), v: `${fmtVol(volumeOf(last))} ${U()}`, d: dur((last.end || last.start) - last.start) })}</div></div>
+        ${prCount(last) ? `<span class="chip gold">${prCount(last)} ${ic('trophy')}</span>` : ''}</div></div>`;
+  }
   return h;
 };
+
+// The one thing to do now: resume, today's plan, or a sensible suggestion
+function todayCard() {
+  const a = S.active;
+  if (a) {
+    const done = setsDone(a), total = a.exercises.reduce((n, e) => n + e.sets.length, 0);
+    return `<div class="card today-card live"><div class="row"><span class="live-dot"></span><span class="muted small">${t('active.title')}</span></div>
+      <div class="today-main">${mosaic(a.exercises.map(e => [e.id]), 'lg')}<div style="min-width:0"><h2>${esc(a.name)}</h2>
+        <div class="muted small">${t('active.since', { t: dur(Date.now() - a.start) })} · ${done}/${total} ${t('sets')}</div>
+        <div class="bar"><i style="width:${total ? (done / total) * 100 : 0}%"></i></div></div></div>
+      <button class="btn primary big" data-go="workout">${ic('play', 'fill')} ${t('resume')}</button></div>`;
+  }
+  const todays = plansOn(todayKey()).filter(p => p.kind === 'note' || !planDone(p));
+  const plan = todays.find(p => p.kind !== 'note');
+  const notes = todays.filter(p => p.kind === 'note');
+  const noteHtml = notes.length ? `<div class="today-notes">${notes.map(n => `<span class="chip">${ic('note')} ${esc(n.name)}</span>`).join('')}</div>` : '';
+  if (plan) {
+    return `<div class="card today-card"><div class="row"><span class="muted small">${ic('calendar')} ${t('home.planned')}</span><span class="spacer"></span>
+        <button class="link-btn" data-go="calendar">${t('nav.calendar')} ${ic('arrowRight')}</button></div>
+      <div class="today-main">${mosaic(plan.items, 'lg')}<div style="min-width:0"><h2>${esc(plan.name)}</h2>
+        <div class="muted small">${t('cal.exercises', { n: plan.items.length })} · ${t('rt.min', { n: routineMinutes(plan.items) })}</div></div></div>
+      ${noteHtml}<button class="btn primary big" data-act="calStart" data-id="${plan.id}">${ic('play', 'fill')} ${t('start')}</button></div>`;
+  }
+  const prog = findProgram(x => x.id === S.program.id);
+  const routine = sortedRoutines()[0];
+  if (prog) {
+    const di = S.program.next % prog.days.length, day = prog.days[di];
+    return `<div class="card today-card"><div class="row"><span class="muted small">${ic('programs')} ${t('next.up', { prog: esc(L(prog.name)) })}</span></div>
+      <div class="today-main">${mosaic(day.items, 'lg')}<div style="min-width:0"><h2>${esc(L(day.name))}</h2>
+        <div class="muted small">${t('cal.exercises', { n: day.items.length })} · ${t('rt.min', { n: routineMinutes(day.items) })}</div></div></div>
+      ${noteHtml}<button class="btn primary big" data-act="startDay" data-prog="${prog.id}" data-day="${di}">${ic('play', 'fill')} ${t('start')}</button></div>`;
+  }
+  if (routine) {
+    return `<div class="card today-card"><div class="row"><span class="muted small">${ic('sparkles')} ${t('home.suggested')}</span></div>
+      <div class="today-main">${mosaic(routine.items, 'lg')}<div style="min-width:0"><h2>${esc(routine.name)}</h2>
+        <div class="muted small">${t('cal.exercises', { n: routine.items.length })} · ${t('rt.min', { n: routineMinutes(routine.items) })} · ${routineLast(routine) ? t('rt.last', { d: relDay(routineLast(routine)) }) : t('rt.never')}</div></div></div>
+      ${noteHtml}<button class="btn primary big" data-act="startRoutine" data-id="${routine.id}">${ic('play', 'fill')} ${t('start')}</button></div>`;
+  }
+  return `<div class="card today-card"><h2>${t('home.noneYet')}</h2><p class="muted small">${t('rt.empty.sub')}</p>${noteHtml}
+    <div class="row wrap"><button class="btn primary" data-act="newRoutine">${ic('plus')} ${t('rt.new')}</button>
+      <button class="btn ghost" data-go="programs">${ic('programs')} ${t('pickProgram')}</button></div></div>`;
+}
+
+// Mon–Sun strip: done / planned / today, plus the week's numbers
+function weekCard(st) {
+  const ws = weekStart(Date.now()), tk = todayKey();
+  const days = [...Array(7)].map((_, i) => { const d = new Date(ws); d.setDate(d.getDate() + i); return d; });
+  const weekWos = S.workouts.filter(w => w.start >= ws);
+  const cells = days.map(d => {
+    const k = dkey(d), done = workoutsOn(k).length, planned = plansOn(k).some(p => p.kind !== 'note' && !planDone(p));
+    return `<button class="wk-day ${done ? 'done' : ''} ${planned ? 'planned' : ''} ${k === tk ? 'today' : ''} ${k > tk ? 'future' : ''}" data-act="weekDay" data-k="${k}">
+      <span class="wk-l">${esc(d.toLocaleDateString(LOC(), { weekday: 'narrow' }))}</span><span class="wk-n">${done ? ic('check') : d.getDate()}</span></button>`;
+  }).join('');
+  return `<div class="section-head"><h2>${t('home.week')}</h2><button class="link-btn" data-go="calendar">${t('nav.calendar')} ${ic('arrowRight')}</button></div>
+    <div class="card"><div class="wk-strip">${cells}</div>
+      <div class="wk-stats">
+        <div><b>${cnt(weekWos.length)}</b><span>${t('workouts')}</span></div>
+        <div><b>${cnt(weekWos.reduce((n, w) => n + setsDone(w), 0))}</b><span>${t('sets')}</span></div>
+        <div><b>${cnt(toD(weekWos.reduce((v, w) => v + volumeOf(w), 0)), 'vol')}</b><span>${U()}</span></div>
+        <div><b>${cnt(st.weekStreak)} ${ic('flame', 'acc')}</b><span>${t('stat.streak')}</span></div>
+      </div></div>`;
+}
+
+// ============================================================ ROUTINES (the main thing people come back for)
+// Last time a routine was trained: workouts started from it carry routineId; older ones match by name
+const routineLast = r => S.workouts.reduce((best, w) => ((w.routineId ? w.routineId === r.id : w.name === r.name) ? Math.max(best, w.start) : best), 0);
+// ~45 s per set plus its rest, rounded to 5 min
+const routineMinutes = items => Math.max(5, Math.round(items.reduce((m, it) => m + (+it[1] || 3) * (45 + (+it[3] || S.profile.rest)), 0) / 300) * 5);
+const routineGroups = items => [...new Set(items.map(it => groupOf(resolve(it[0]).id)).filter(Boolean))];
+const sortedRoutines = () => [...S.routines].sort((a, b) => routineLast(b) - routineLast(a) || S.routines.indexOf(b) - S.routines.indexOf(a));
+function relDay(ts) {
+  const start = d => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x.getTime(); };
+  const n = Math.round((start(Date.now()) - start(ts)) / DAY);
+  return n <= 0 ? t('rel.today') : n === 1 ? t('rel.yesterday') : n < 7 ? t('rel.daysAgo', { n }) : shortDate(ts);
+}
+
+// Photo miniatures of the first exercises (2×2 when there are 4+)
+function mosaic(items, cls = '') {
+  const ids = items.slice(0, 4).map(it => resolve(it[0]).id);
+  return `<div class="mosaic ${cls} n${Math.max(1, ids.length)}" aria-hidden="true">${ids.map(id => (hasImg(id) ? `<img src="${img(id)}" alt="" loading="lazy">` : '<i></i>')).join('')}
+    ${items.length > 4 ? `<span class="more">+${items.length - 4}</span>` : ''}</div>`;
+}
+
+function routineCard(r, { compact = false } = {}) {
+  const last = routineLast(r), groups = routineGroups(r.items);
+  const meta = `${t('cal.exercises', { n: r.items.length })} · ${t('rt.min', { n: routineMinutes(r.items) })}`;
+  if (compact) {
+    return `<div class="rt-mini">
+      <div data-act="viewRoutine" data-id="${r.id}" class="rt-mini-tap">${mosaic(r.items, 'wide')}
+        <b>${esc(r.name)}</b><span class="muted small">${meta}</span>
+        <span class="muted small rc-last">${last ? t('rt.last', { d: relDay(last) }) : t('rt.never')}</span></div>
+      <button class="btn primary sm" data-act="startRoutine" data-id="${r.id}">${ic('play', 'fill')} ${t('start')}</button></div>`;
+  }
+  return `<div class="routine-card">
+    <div class="rc-tap" data-act="viewRoutine" data-id="${r.id}">${mosaic(r.items)}
+      <div class="rc-info"><b>${esc(r.name)}</b>
+        <div class="muted small">${meta}</div>
+        ${groups.length ? `<div class="rc-groups">${groups.slice(0, 3).map(g => `<span class="chip">${groupLabel(g)}</span>`).join('')}${groups.length > 3 ? `<span class="chip">+${groups.length - 3}</span>` : ''}</div>` : ''}
+        <div class="muted small rc-last">${ic('timer')} ${last ? t('rt.last', { d: relDay(last) }) : t('rt.never')}</div></div></div>
+    <div class="rc-actions">
+      <button class="round-btn" data-act="editRoutine" data-id="${r.id}" aria-label="${t('edit')}" title="${t('edit')}">${ic('edit')}</button>
+      <button class="btn primary sm" data-act="startRoutine" data-id="${r.id}">${ic('play', 'fill')} ${t('start')}</button></div></div>`;
+}
+
+function viewRoutine(id) {
+  const r = S.routines.find(x => x.id === id);
+  if (!r) return;
+  const last = routineLast(r);
+  openModal(`<button class="close" data-act="close" aria-label="Close">${ic('x')}</button>
+    <div class="rv-head">${mosaic(r.items, 'lg')}<div style="min-width:0"><h2 style="margin:0">${esc(r.name)}</h2>
+      <div class="muted small">${t('cal.exercises', { n: r.items.length })} · ${t('rt.min', { n: routineMinutes(r.items) })}</div>
+      <div class="muted small">${last ? t('rt.last', { d: relDay(last) }) : t('rt.never')}</div></div></div>
+    ${r.items.map(programItem).join('')}
+    <div class="row wrap" style="margin-top:14px;gap:8px">
+      <button class="btn danger" data-act="delRoutine" data-id="${r.id}">${ic('trash')} ${t('delete')}</button>
+      <button class="btn ghost" data-act="editRoutine" data-id="${r.id}">${ic('edit')} ${t('edit')}</button><span class="spacer"></span>
+      <button class="btn primary" data-act="startRoutine" data-id="${r.id}">${ic('play', 'fill')} ${t('start')}</button></div>`);
+}
+
+// Routines | Programs switch shared by both screens
+const trainTabs = cur => `<div class="seg train-seg">
+  <button class="${cur === 'routines' ? 'on' : ''}" data-go="workout">${ic('save')} ${t('rt.mine')}</button>
+  <button class="${cur === 'programs' ? 'on' : ''}" data-go="programs">${ic('programs')} ${t('nav.programs')}</button></div>`;
+
+function routinesHub() {
+  const routines = sortedRoutines();
+  const last = sortedWorkouts().pop();
+  const prog = findProgram(x => x.id === S.program.id);
+  const di = prog ? S.program.next % prog.days.length : 0;
+  return `<div class="page-head"><h1>${t('rt.mine')}</h1><span class="spacer"></span>
+      <button class="btn primary sm" data-act="newRoutine">${ic('plus')} ${t('rt.new')}</button></div>
+    ${trainTabs('routines')}
+    ${routines.length ? `<div class="routine-list">${routines.map(r => routineCard(r)).join('')}</div>`
+      : `<div class="card rt-empty"><b>${t('rt.empty.title')}</b><p class="muted small">${t('rt.empty.sub')}</p>
+          <button class="btn primary" data-act="newRoutine">${ic('plus')} ${t('rt.new')}</button></div>`}
+    <div class="quick-opts"><div class="muted small">${t('rt.quick')}</div><div class="row wrap">
+      ${prog ? `<button class="btn ghost sm" data-act="startDay" data-prog="${prog.id}" data-day="${di}">${ic('programs')} ${esc(L(prog.days[di].name))}</button>` : ''}
+      <button class="btn ghost sm" data-act="startEmpty">${ic('plus')} ${t('rt.empty')}</button>
+      ${last ? `<button class="btn ghost sm" data-act="repeat" data-id="${last.id}">${ic('repeat')} ${t('rt.repeat')}</button>` : ''}
+    </div></div>`;
+}
 
 // ============================================================ PROGRAMS
 const PRG = { level: null };
 VIEWS.programs = () => {
   const lvl = PRG.level || S.profile.level || 'beginner';
   const progs = PROGRAMS.filter(p => p.level === lvl);
-  let h = `<h1>${t('nav.programs')}</h1>
-    ${genCta()}
+  let h = `<div class="page-head"><h1>${t('nav.programs')}</h1></div>
+    ${trainTabs('programs')}
     ${S.myPrograms.length ? `<h2>${t('myPrograms')}</h2><div class="grid two" style="margin-bottom:18px">${S.myPrograms.map(programCard).join('')}</div>` : ''}
     <div class="seg" style="margin-bottom:14px">${Object.keys(LEVEL_ICONS).map(k => `<button class="${k === lvl ? 'on' : ''}" data-act="prgLevel" data-level="${k}">${ic(LEVEL_ICONS[k])} ${t(`lvl.${k}`)}</button>`).join('')}</div>
     <div class="grid two">${progs.map(programCard).join('')}</div>`;
 
-  h += `<h2 style="margin-top:22px">${t('myRoutines')}</h2>`;
-  if (!S.routines.length) h += `<div class="card muted small">${t('routines.empty')}</div>`;
-  else h += `<div class="grid two">${S.routines.map(r => `<div class="card"><div class="row"><h3 style="margin:0">${esc(r.name)}</h3><span class="spacer"></span>
-      <button class="round-btn" data-act="delRoutine" data-id="${r.id}" aria-label="${t('deleteRoutine')}">${ic('trash')}</button></div>
-      <p class="muted small">${r.items.map(i => esc(exName(resolve(i[0]).id))).join(' · ')}</p>
-      <div class="row wrap"><button class="btn primary" data-act="startRoutine" data-id="${r.id}">${ic('play', 'fill')} ${t('start')}</button>
-        <button class="btn ghost" data-act="editRoutine" data-id="${r.id}">${ic('edit')} ${t('edit')}</button></div></div>`).join('')}</div>`;
   return h;
 };
 
@@ -867,7 +980,7 @@ const muscleGrid = (sel, act, extra = '') => `<div class="muscle-grid">${Object.
 
 VIEWS.build = () => {
   const lvl = S.profile.level || 'beginner';
-  let h = `<h1>${ic('sparkles', 'acc')} ${t('gen.title')}</h1>
+  let h = `<div class="page-head"><button class="round-btn" data-act="genBack" aria-label="${t('rt.mine')}">${ic('arrowLeft')}</button><h1 style="margin:0">${t('gen.title')}</h1></div>
     <div class="seg" style="margin-bottom:14px">${[['day', t('gen.tab.day')], ['week', t('gen.tab.week')]].map(([v, l]) => `<button class="${GEN.tab === v ? 'on' : ''}" data-act="genTab" data-v="${v}">${l}</button>`).join('')}</div>`;
   const opts = `<div class="row wrap" style="gap:16px;margin-top:14px">
       <div><div class="muted small">${t('gen.duration')}</div>${segOf('genDur', GEN.dur, [['short', t('gen.dur.short')], ['normal', t('gen.dur.normal')], ['long', t('gen.dur.long')]])}</div>
@@ -1235,9 +1348,9 @@ function renderPick() {
 }
 
 // ============================================================ WORKOUT
-async function startWorkout({ name = 'Workout', items = [], programId = null, dayIdx = null, planId = null } = {}) {
+async function startWorkout({ name = 'Workout', items = [], programId = null, dayIdx = null, planId = null, routineId = null } = {}) {
   if (S.active && !(await ask({ msg: t('wo.inProgressConfirm'), ok: t('discard'), danger: true }))) return;
-  S.active = { id: uid(), name, start: Date.now(), programId, dayIdx, planId, note: '', exercises: [] };
+  S.active = { id: uid(), name, start: Date.now(), programId, dayIdx, planId, routineId, note: '', exercises: [] };
   for (const it of items) {
     const r = resolve(it[0]);
     pushExercise(r.id, { sets: it[1], target: it[2], rest: it[3], orig: r.why ? r.orig : null, ss: it[4] || null });
@@ -1262,19 +1375,7 @@ const woName = () => t('weekdayWorkout', { day: new Date().toLocaleDateString(LO
 
 VIEWS.workout = () => {
   const a = S.active;
-  if (!a) {
-    const last = sortedWorkouts().pop();
-    const prog = findProgram(x => x.id === S.program.id);
-    const di = prog ? S.program.next % prog.days.length : 0;
-    return `<h1>${t('wo.title')}</h1><div class="card empty"><div class="big">${ic('dumbbell')}</div><p>${t('wo.none')}</p>
-      <div class="grid" style="max-width:380px;margin:0 auto">
-        ${prog ? `<button class="btn primary big" data-act="startDay" data-prog="${prog.id}" data-day="${di}">${ic('play', 'fill')} ${esc(L(prog.days[di].name))} <small>(${esc(L(prog.name))})</small></button>` : ''}
-        <button class="btn ${prog ? 'ghost' : 'primary'} big" data-go="build">${ic('sparkles')} ${t('gen.cta.btn')}</button>
-        <button class="btn ghost big" data-act="startEmpty">${t('wo.startEmpty')}</button>
-        ${last ? `<button class="btn ghost big" data-act="repeat" data-id="${last.id}">${ic('repeat')} ${t('wo.repeat', { x: esc(last.name) })}</button>` : ''}
-        <button class="btn ghost big" data-go="programs">${ic('programs')} ${t('wo.browse')}</button>
-      </div></div>`;
-  }
+  if (!a) return routinesHub();
   return `<input type="text" id="woName" value="${esc(a.name)}" aria-label="${t('wo.name')}" style="font-weight:800;font-size:1.35rem;background:none;border-color:transparent;padding-left:2px;margin-bottom:8px;backdrop-filter:none">
     <div class="grid stats" style="margin-bottom:14px">
       ${stat(mmss((Date.now() - a.start) / 1000), t('duration'), 'woTimer')}
@@ -1740,7 +1841,7 @@ const ACT = {
     const name = genTitle().slice(0, 60);
     S.routines.push({ id: uid(), name, items: finalItems() });
     save(); popDone(t('routine.saved'), esc(name));
-    if (GEN.edit) { resetCreator(); go('programs'); }
+    resetCreator(); go('workout');
   },
   genSaveEdit: () => {
     if (!GEN.items.length) return warn(t('gen.hintPick'));
@@ -1752,9 +1853,9 @@ const ACT = {
     save();
     popDone(t('edit.saved'), esc(target.name));
     resetCreator();
-    if (kind === 'routine') go('programs'); else { const d = fromKey(target.date); Object.assign(CAL, { y: d.getFullYear(), m: d.getMonth(), sel: target.date }); go('calendar'); }
+    if (kind === 'routine') go('workout'); else { const d = fromKey(target.date); Object.assign(CAL, { y: d.getFullYear(), m: d.getMonth(), sel: target.date }); go('calendar'); }
   },
-  genCancelEdit: () => { const back = GEN.edit?.kind === 'plan' ? 'calendar' : 'programs'; resetCreator(); go(back); },
+  genCancelEdit: () => { const back = GEN.edit?.kind === 'plan' ? 'calendar' : 'workout'; resetCreator(); go(back); },
   genSchedule: () => openSchedule({ name: genTitle(), items: finalItems() }, GEN.date),
 
   // calendar
@@ -1884,8 +1985,12 @@ const ACT = {
     startWorkout({ name: `${L(p.name)} — ${L(p.days[di].name)}`, items: p.days[di].items, programId: p.id, dayIdx: di });
   },
   startEmpty: () => startWorkout({ name: cap(woName()) }),
-  startRoutine: el => { const r = S.routines.find(x => x.id === el.dataset.id); startWorkout({ name: r.name, items: r.items }); },
-  delRoutine: el => outThen(el, () => undoable(t('del.routine'), () => { S.deleted.push(el.dataset.id); S.routines = S.routines.filter(x => x.id !== el.dataset.id); save(); render(); })),
+  startRoutine: el => { const r = S.routines.find(x => x.id === el.dataset.id); if (r) startWorkout({ name: r.name, items: r.items, routineId: r.id }); },
+  viewRoutine: el => viewRoutine(el.dataset.id),
+  newRoutine: () => { resetCreator(); GEN.tab = 'day'; go('build'); },
+  genBack: () => { if (GEN.edit) resetCreator(); go('workout'); },
+  weekDay: el => { const d = fromKey(el.dataset.k); Object.assign(CAL, { y: d.getFullYear(), m: d.getMonth(), sel: el.dataset.k }); go('calendar'); },
+  delRoutine: el => outThen(el, () => undoable(t('del.routine'), () => { S.deleted.push(el.dataset.id); S.routines = S.routines.filter(x => x.id !== el.dataset.id); save(); closeModal(); render(); })),
   editRoutine: el => loadForEdit('routine', el.dataset.id),
   editPlan: el => loadForEdit('plan', el.dataset.id),
   saveRoutine: async el => {
