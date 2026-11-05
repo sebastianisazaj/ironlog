@@ -553,7 +553,7 @@ function render({ animate = false } = {}) {
   JUST = null;
   tick();
 }
-window.addEventListener('hashchange', () => { openProgramId = null; closeModal(); render(); });
+window.addEventListener('hashchange', () => { openProgramId = null; rtSorting = false; closeModal(); render(); });
 
 function moveInd() {
   const b = $('.tabbar button.on'), ind = $('#tabInd');
@@ -683,7 +683,9 @@ const routineLast = r => S.workouts.reduce((best, w) => ((w.routineId ? w.routin
 // ~45 s per set plus its rest, rounded to 5 min
 const routineMinutes = items => Math.max(5, Math.round(items.reduce((m, it) => m + (+it[1] || 3) * (45 + (+it[3] || S.profile.rest)), 0) / 300) * 5);
 const routineGroups = items => [...new Set(items.map(it => groupOf(resolve(it[0]).id)).filter(Boolean))];
-const sortedRoutines = () => [...S.routines].sort((a, b) => routineLast(b) - routineLast(a) || S.routines.indexOf(b) - S.routines.indexOf(a));
+// Routines keep the order the user gives them (drag in "Reorder" mode); new ones go last
+const sortedRoutines = () => [...S.routines];
+let rtSorting = false;
 function relDay(ts) {
   const start = d => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x.getTime(); };
   const n = Math.round((start(Date.now()) - start(ts)) / DAY);
@@ -743,9 +745,13 @@ function routinesHub() {
   const last = sortedWorkouts().pop();
   const prog = findProgram(x => x.id === S.program.id);
   const di = prog ? S.program.next % prog.days.length : 0;
+  if (rtSorting && routines.length > 1) return routineSorter(routines);
+  rtSorting = false;
   return `<div class="page-head"><h1>${t('rt.mine')}</h1><span class="spacer"></span>
       <button class="btn primary sm" data-act="newRoutine">${ic('plus')} ${t('rt.new')}</button></div>
     ${trainTabs('routines')}
+    ${routines.length > 1 ? `<div class="rt-tools"><span class="muted small">${t('rt.count', { n: routines.length })}</span>
+      <button class="link-btn" data-act="rtSort">${ic('grip')} ${t('rt.sort')}</button></div>` : ''}
     ${routines.length ? `<div class="routine-list">${routines.map(r => routineCard(r)).join('')}</div>`
       : `<div class="card rt-empty"><b>${t('rt.empty.title')}</b><p class="muted small">${t('rt.empty.sub')}</p>
           <button class="btn primary" data-act="newRoutine">${ic('plus')} ${t('rt.new')}</button></div>`}
@@ -755,6 +761,21 @@ function routinesHub() {
       ${last ? `<button class="btn ghost sm" data-act="repeat" data-id="${last.id}">${ic('repeat')} ${t('rt.repeat')}</button>` : ''}
       <button class="btn ghost sm" data-act="manualLog">${ic('edit')} ${t('manual.title')}</button>
     </div></div>`;
+}
+
+// Reorder mode: compact rows that use the same press-and-drag as the workout creator
+function routineSorter(routines) {
+  return `<div class="page-head"><h1>${t('rt.sort')}</h1><span class="spacer"></span>
+      <button class="btn primary sm" data-act="rtSortDone">${ic('check')} ${t('item.done')}</button></div>
+    <p class="muted small drag-hint">${ic('grip')} ${t('rt.sortHint')}</p>
+    <div class="row wrap rt-sort-quick">
+      <button class="btn ghost sm" data-act="rtSortBy" data-by="az">${t('rt.sortAz')}</button>
+      <button class="btn ghost sm" data-act="rtSortBy" data-by="recent">${ic('timer')} ${t('rt.sortRecent')}</button></div>
+    <div class="sel-list" data-list="routines">${routines.map((r, i) => `<div class="sel-row" data-i="${i}">
+        <span class="drag-h" aria-label="${t('rt.sortHint')}">${ic('grip')}</span>
+        <div class="sel-thumb">${mosaic(r.items, 'sm')}<span class="sel-n">${i + 1}</span></div>
+        <div class="sel-main"><b>${esc(r.name)}</b>
+          <span class="muted small sel-meta">${t('cal.exercises', { n: r.items.length })} · ${t('rt.min', { n: routineMinutes(r.items) })}</span></div></div>`).join('')}</div>`;
 }
 
 // ============================================================ PROGRAMS
@@ -1276,8 +1297,10 @@ function dragEnd() {
   DRAG = null;
   suppressClickUntil = Date.now() + 400;
   if (d.to !== d.from) {
-    const [it] = GEN.items.splice(d.from, 1);
-    GEN.items.splice(d.to, 0, it);
+    const list = d.row.parentElement.dataset.list === 'routines' ? S.routines : GEN.items;
+    const [it] = list.splice(d.from, 1);
+    list.splice(d.to, 0, it);
+    if (list === S.routines) save();
     navigator.vibrate?.(12);
   }
   render();
@@ -1861,7 +1884,9 @@ function mergeDocs(a, b) {
   const out = hydrate({ ...newer, deleted, updatedAt: Math.max(a.updatedAt || 0, b.updatedAt || 0) });
   out.workouts = pick([...a.workouts, ...b.workouts]);
   out.bodylog = pick([...(a.bodylog || []), ...(b.bodylog || [])]);
-  out.routines = pick([...(a.routines || []), ...(b.routines || [])]);
+  // routines follow the order of whichever device changed last
+  const order = new Map((newer.routines || []).map((r, i) => [r.id, i]));
+  out.routines = pick([...(a.routines || []), ...(b.routines || [])]).sort((x, y) => (order.get(x.id) ?? 1e9) - (order.get(y.id) ?? 1e9));
   out.plan = pick([...(a.plan || []), ...(b.plan || [])]);
   if (out.active && out.workouts.some(w => w.id === out.active.id)) out.active = null;
   return out;
@@ -2181,6 +2206,15 @@ const ACT = {
   startRoutine: el => { const r = S.routines.find(x => x.id === el.dataset.id); if (r) startWorkout({ name: r.name, items: r.items, routineId: r.id }); },
   viewRoutine: el => viewRoutine(el.dataset.id),
   newRoutine: () => { resetCreator(); GEN.tab = 'day'; go('build'); },
+  rtSort: () => { rtSorting = true; render({ animate: true }); },
+  rtSortDone: () => { rtSorting = false; render({ animate: true }); ok(t('rt.sorted')); },
+  rtSortBy: el => {
+    const prev = [...S.routines];
+    if (el.dataset.by === 'az') S.routines.sort((a, b) => a.name.localeCompare(b.name, LOC(), { numeric: true, sensitivity: 'base' }));
+    else S.routines.sort((a, b) => routineLast(b) - routineLast(a));
+    save(); render();
+    toast(t('rt.sorted'), 'success', { action: { label: t('undo'), fn: () => { S.routines = prev; save(); render(); } } });
+  },
   genBack: () => { if (GEN.edit) resetCreator(); go('workout'); },
   weekDay: el => { const d = fromKey(el.dataset.k); Object.assign(CAL, { y: d.getFullYear(), m: d.getMonth(), sel: el.dataset.k }); go('calendar'); },
   delRoutine: el => outThen(el, () => undoable(t('del.routine'), () => { S.deleted.push(el.dataset.id); S.routines = S.routines.filter(x => x.id !== el.dataset.id); save(); closeModal(); render(); })),
