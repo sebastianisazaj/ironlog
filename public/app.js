@@ -418,7 +418,7 @@ function beep() {
   navigator.vibrate?.([200, 100, 200]);
 }
 
-const stat = (value, label, id = '') => `<div class="stat"><b ${id ? `id="${id}"` : ''}>${value}</b><span>${label}</span></div>`;
+const stat = (value, label, id = '') => `<div class="stat"><b ${id ? `id="${id}"` : ''}>${value}</b><span>${cap(String(label))}</span></div>`;
 const thumb = (id, size = 56) => (hasImg(id)
   ? `<img class="thumb-sm" src="${img(id)}" alt="" loading="lazy" style="width:${size}px;height:${Math.round(size * 0.75)}px">`
   : `<div class="thumb-sm" style="width:${size}px;height:${Math.round(size * 0.75)}px;background:var(--chip)"></div>`);
@@ -609,7 +609,7 @@ VIEWS.home = () => {
   if (last) {
     h += `<div class="section-head"><h2>${t('home.last')}</h2></div>
       <div class="card tight"><div class="hist-item" data-act="showWorkout" data-id="${last.id}">${mosaic(last.exercises.map(e => [e.id]), 'sm')}
-        <div style="flex:1;min-width:0"><b>${esc(last.name)}</b><div class="muted small">${relDay(last.start)} · ${t('hist.line', { e: last.exercises.length, s: setsDone(last), v: `${fmtVol(volumeOf(last))} ${U()}`, d: dur((last.end || last.start) - last.start) })}</div></div>
+        <div style="flex:1;min-width:0"><b>${esc(last.name)}</b><div class="muted small">${cap(relDay(last.start))} · ${t('hist.line', { e: last.exercises.length, s: setsDone(last), v: `${fmtVol(volumeOf(last))} ${U()}`, d: dur((last.end || last.start) - last.start) })}</div></div>
         ${prCount(last) ? `<span class="chip gold">${prCount(last)} ${ic('trophy')}</span>` : ''}</div></div>`;
   }
   return h;
@@ -622,7 +622,7 @@ function todayCard() {
     const done = setsDone(a), total = a.exercises.reduce((n, e) => n + e.sets.length, 0);
     return `<div class="card today-card live"><div class="row"><span class="live-dot"></span><span class="muted small">${t('active.title')}</span></div>
       <div class="today-main">${mosaic(a.exercises.map(e => [e.id]), 'lg')}<div style="min-width:0"><h2>${esc(a.name)}</h2>
-        <div class="muted small">${t('active.since', { t: dur(Date.now() - a.start) })} · ${done}/${total} ${t('sets')}</div>
+        <div class="muted small">${cap(a.manual ? t('manual.badge', { d: fmtDate(a.start) }) : t('active.since', { t: dur(Date.now() - a.start) }))} · ${done}/${total} ${t('sets')}</div>
         <div class="bar"><i style="width:${total ? (done / total) * 100 : 0}%"></i></div></div></div>
       <button class="btn primary big" data-go="workout">${ic('play', 'fill')} ${t('resume')}</button></div>`;
   }
@@ -670,10 +670,10 @@ function weekCard(st) {
   return `<div class="section-head"><h2>${t('home.week')}</h2><button class="link-btn" data-go="calendar">${t('nav.calendar')} ${ic('arrowRight')}</button></div>
     <div class="card"><div class="wk-strip">${cells}</div>
       <div class="wk-stats">
-        <div><b>${cnt(weekWos.length)}</b><span>${t('workouts')}</span></div>
-        <div><b>${cnt(weekWos.reduce((n, w) => n + setsDone(w), 0))}</b><span>${t('sets')}</span></div>
-        <div><b>${cnt(toD(weekWos.reduce((v, w) => v + volumeOf(w), 0)), 'vol')}</b><span>${U()}</span></div>
-        <div><b>${cnt(st.weekStreak)} ${ic('flame', 'acc')}</b><span>${t('stat.streak')}</span></div>
+        <div><b>${cnt(weekWos.length)}</b><span>${cap(t('workouts'))}</span></div>
+        <div><b>${cnt(weekWos.reduce((n, w) => n + setsDone(w), 0))}</b><span>${cap(t('sets'))}</span></div>
+        <div><b>${cnt(toD(weekWos.reduce((v, w) => v + volumeOf(w), 0)), 'vol')}</b><span>${cap(t('volume'))} (${U()})</span></div>
+        <div><b>${cnt(st.weekStreak)} ${ic('flame', 'acc')}</b><span>${cap(t('stat.streak'))}</span></div>
       </div></div>`;
 }
 
@@ -753,6 +753,7 @@ function routinesHub() {
       ${prog ? `<button class="btn ghost sm" data-act="startDay" data-prog="${prog.id}" data-day="${di}">${ic('programs')} ${esc(L(prog.days[di].name))}</button>` : ''}
       <button class="btn ghost sm" data-act="startEmpty">${ic('plus')} ${t('rt.empty')}</button>
       ${last ? `<button class="btn ghost sm" data-act="repeat" data-id="${last.id}">${ic('repeat')} ${t('rt.repeat')}</button>` : ''}
+      <button class="btn ghost sm" data-act="manualLog">${ic('edit')} ${t('manual.title')}</button>
     </div></div>`;
 }
 
@@ -1008,17 +1009,13 @@ VIEWS.build = () => {
       <div class="row wrap"><h2 style="margin:0">${t('gen.selected')} <span class="muted small">· ${t('cal.exercises', { n })}</span></h2><span class="spacer"></span>
         ${n ? `<button class="btn sm ghost" data-act="genClear">${ic('trash')} ${t('gen.clear')}</button>` : ''}</div>
       ${GEN.date ? `<p class="small" style="margin:8px 0 0"><span class="chip swap">${ic('calendar')} ${esc(fromKey(GEN.date).toLocaleDateString(LOC(), { weekday: 'long', day: 'numeric', month: 'short' }))}</span></p>` : ''}
-      ${n ? GEN.items.map((it, i) => `<div class="sel-row">
-          <span class="sel-n ${ssLetter(i) ? 'ss' : ''}">${ssLetter(i) ? `${ssLetter(i)}${(i % 2) + 1}` : i + 1}</span>${thumb(it[0], 48)}
-          <div class="sel-main"><b data-act="showEx" data-id="${esc(it[0])}">${esc(exName(it[0]))}</b>
-            <div class="sel-edit">${it[5] ? `<span class="chip">${groupLabel(it[5])}</span>` : ''}
-              <label><input type="number" inputmode="numeric" min="1" max="10" data-gi="${i}" data-gf="sets" value="${esc(it[1])}" aria-label="${t('sets')}"> ${t('sets')}</label>
-              <label>× <input type="text" data-gi="${i}" data-gf="reps" value="${esc(it[2])}" aria-label="${t('reps')}"> ${t('reps')}</label></div></div>
-          <div class="sel-actions">
-            <button class="round-btn" data-act="genMove" data-i="${i}" data-d="-1" ${i ? '' : 'disabled'} aria-label="${t('moveUp')}">${ic('arrowUp')}</button>
-            <button class="round-btn" data-act="genMove" data-i="${i}" data-d="1" ${i < n - 1 ? '' : 'disabled'} aria-label="${t('moveDown')}">${ic('arrowDown')}</button>
-            <button class="round-btn" data-act="genReroll" data-i="${i}" ${it[5] ? '' : 'disabled'} aria-label="${t('gen.reroll')}" title="${t('gen.reroll')}">${ic('refresh')}</button>
-            <button class="round-btn" data-act="genRemove" data-i="${i}" aria-label="${t('gen.remove')}">${ic('x')}</button></div></div>`).join('')
+      ${n ? `<p class="muted small drag-hint">${ic('grip')} ${t('drag.hint')}</p><div class="sel-list">${GEN.items.map((it, i) => `<div class="sel-row" data-i="${i}">
+          <span class="drag-h" aria-label="${t('drag.hint')}">${ic('grip')}</span>
+          <span class="sel-thumb">${thumb(it[0], 52)}<span class="sel-n ${ssLetter(i) ? 'ss' : ''}">${ssLetter(i) ? `${ssLetter(i)}${(i % 2) + 1}` : i + 1}</span></span>
+          <div class="sel-main" data-act="genEdit" data-i="${i}"><b>${esc(exName(it[0]))}</b>
+            <div class="muted small sel-meta"><span>${esc(it[1])} × ${esc(it[2])}</span><span>${ic('timer')} ${mmss(+it[3] || S.profile.rest)}</span></div></div>
+          <button class="round-btn" data-act="genEdit" data-i="${i}" aria-label="${t('item.title')}" title="${t('item.title')}">${ic('edit')}</button>
+          <button class="round-btn" data-act="genRemove" data-i="${i}" aria-label="${t('gen.remove')}">${ic('x')}</button></div>`).join('')}</div>`
         : `<p class="muted small">${t('gen.hintPick')}</p>`}
       <button class="btn ghost big" data-act="genAddAny" style="margin-top:12px">${ic('plus')} ${t('gen.addAny')}</button>
       ${GEN.edit ? `<div class="row wrap" style="margin-top:14px;gap:8px">
@@ -1133,6 +1130,7 @@ VIEWS.calendar = () => {
       <button class="btn ghost" data-act="calRoutine">${ic('save')} ${t('cal.addRoutine')}</button>
       <button class="btn ghost" data-act="calProgram">${ic('programs')} ${t('cal.addProgram')}</button>
       <button class="btn ghost" data-act="calNote">${ic('note')} ${t('cal.addNote')}</button>
+      ${sel <= tk ? `<button class="btn ghost" data-act="calManual">${ic('edit')} ${t('manual.title')}</button>` : ''}
     </div>
     <label class="switch" style="margin-top:14px"><input type="checkbox" id="calRepeat" ${CAL.repeat ? 'checked' : ''}><i></i><span class="small">${t('cal.repeat')}</span></label></div>`;
 
@@ -1174,6 +1172,135 @@ function viewPlan(id) {
     <div class="row wrap" style="margin-top:14px;gap:8px"><button class="btn danger" data-act="calDel" data-id="${p.id}">${ic('trash')} ${t('cal.del')}</button>
       <button class="btn ghost" data-act="editPlan" data-id="${p.id}">${ic('edit')} ${t('edit')}</button><span class="spacer"></span>
       ${planDone(p) ? `<span class="chip good">${ic('check')} ${t('cal.doneLbl')}</span>` : `<button class="btn primary" data-act="calStart" data-id="${p.id}">${ic('play', 'fill')} ${t('start')}</button>`}</div>`);
+}
+
+// ---- creator: edit one exercise (sets, reps, rest, swap) in a sheet
+let EDIT_I = null;
+const REP_PRESETS = ['5', '6-8', '8', '8-12', '10', '12', '15', '20', '30s', '45s', '60s'];
+function openItemEditor(i) {
+  const it = GEN.items[i];
+  if (!it) return;
+  EDIT_I = i;
+  openModal(`<button class="close" data-act="close" aria-label="Close">${ic('x')}</button>
+    <div class="rv-head">${thumb(it[0], 72)}<div style="min-width:0"><div class="muted small">${t('item.title')}</div>
+      <h2 style="margin:2px 0 0">${esc(exName(it[0]))}</h2>${it[5] ? `<span class="chip" style="margin-top:6px">${groupLabel(it[5])}</span>` : ''}</div></div>
+    <div class="item-grid">
+      <div><div class="muted small">${cap(t('sets'))}</div><div class="stepper">
+        <button data-act="itemSets" data-d="-1" aria-label="−">${ic('minus')}</button><b id="itemSets">${esc(it[1])}</b>
+        <button data-act="itemSets" data-d="1" aria-label="+">${ic('plus')}</button></div></div>
+      <label class="field" style="margin:0"><span>${t('item.reps')}</span><input type="text" id="itemReps" value="${esc(it[2])}" maxlength="12"></label>
+    </div>
+    <div class="chips" style="margin:10px 0 14px">${REP_PRESETS.map(r => `<button class="chip ${String(it[2]) === r ? 'on' : ''}" data-act="itemReps" data-v="${r}">${r}</button>`).join('')}</div>
+    <div class="muted small">${t('item.rest')}</div>
+    <div class="seg" style="margin:4px 0 16px">${[45, 60, 90, 120, 150, 180].map(r => `<button class="${+it[3] === r ? 'on' : ''}" data-act="itemRest" data-v="${r}">${mmss(r)}</button>`).join('')}</div>
+    <div class="row wrap" style="gap:8px">
+      <button class="btn ghost sm" data-act="showEx" data-id="${esc(it[0])}">${ic('info')} ${t('item.howto')}</button>
+      ${it[5] ? `<button class="btn ghost sm" data-act="itemReroll">${ic('refresh')} ${t('item.reroll')}</button>` : ''}
+      <button class="btn ghost sm" data-act="itemSwap">${ic('swap')} ${t('item.swap')}</button>
+      <button class="btn danger sm" data-act="itemRemove">${ic('trash')} ${t('gen.remove')}</button>
+    </div>
+    <button class="btn primary big" data-act="itemDone" style="margin-top:16px">${ic('check')} ${t('item.done')}</button>`);
+}
+
+// ---- creator: press and hold a row (or grab its handle) and drag it to a new position
+let DRAG = null;
+document.addEventListener('pointerdown', ev => {
+  const row = ev.target.closest('.sel-list .sel-row');
+  if (!row || ev.button > 0 || ev.target.closest('button:not(.drag-h), input')) return;
+  if (ev.target.closest('.drag-h')) { ev.preventDefault(); return beginDrag(row, ev); }
+  // anywhere else on the row: long-press, cancelled by moving (so normal scrolling still works)
+  const x0 = ev.clientX, y0 = ev.clientY;
+  const timer = setTimeout(() => { cleanup(); beginDrag(row, ev); }, 320);
+  const moved = e => { if (Math.hypot(e.clientX - x0, e.clientY - y0) > 8) cleanup(); };
+  const cleanup = () => { clearTimeout(timer); removeEventListener('pointermove', moved); removeEventListener('pointerup', cleanup); removeEventListener('pointercancel', cleanup); };
+  addEventListener('pointermove', moved);
+  addEventListener('pointerup', cleanup);
+  addEventListener('pointercancel', cleanup);
+});
+// once a drag has started, the page must not scroll under the finger
+document.addEventListener('touchmove', ev => { if (DRAG) ev.preventDefault(); }, { passive: false });
+document.addEventListener('contextmenu', ev => { if (DRAG || ev.target.closest('.sel-list .sel-row')) ev.preventDefault(); });
+
+function beginDrag(row, ev) {
+  const rows = [...row.parentElement.children];
+  const from = rows.indexOf(row);
+  const tops = rows.map(r => r.getBoundingClientRect().top + scrollY);
+  const hs = rows.map(r => r.getBoundingClientRect().height);
+  const h = hs[from];
+  DRAG = { row, rows, from, to: from, tops, hs, h, startY: ev.clientY + scrollY, lastY: ev.clientY, raf: 0, ended: false };
+  row.classList.add('dragging');
+  document.body.classList.add('is-dragging');
+  rows.forEach(r => { if (r !== row) r.classList.add('shifting'); });
+  navigator.vibrate?.(18);
+  addEventListener('pointermove', dragMove);
+  addEventListener('pointerup', dragEnd);
+  addEventListener('pointercancel', dragEnd);
+  autoScroll();
+}
+function dragLayout() {
+  const d = DRAG, dy = d.lastY + scrollY - d.startY;
+  d.row.style.transform = `translateY(${dy}px) scale(1.02)`;
+  // a neighbour gives way as soon as the dragged row's leading edge crosses its middle
+  const top = d.tops[d.from] + dy, bottom = top + d.h;
+  let up = 0, down = 0;
+  d.tops.forEach((t0, i) => {
+    const mid = t0 + d.hs[i] / 2;
+    if (i < d.from && top < mid) up++;
+    if (i > d.from && bottom > mid) down++;
+  });
+  d.to = d.from - up + down;
+  d.rows.forEach((r, i) => {
+    if (r === d.row) return;
+    const shift = d.from < d.to && i > d.from && i <= d.to ? -d.h : d.to < d.from && i >= d.to && i < d.from ? d.h : 0;
+    r.style.transform = shift ? `translateY(${shift}px)` : '';
+  });
+}
+function dragMove(e) { if (!DRAG) return; DRAG.lastY = e.clientY; dragLayout(); }
+// keep scrolling while the finger sits near the top or the dock
+function autoScroll() {
+  if (!DRAG || DRAG.ended) return;
+  const y = DRAG.lastY, edge = 120;
+  const v = y > innerHeight - edge ? (y - (innerHeight - edge)) / 6 : y < edge ? -(edge - y) / 6 : 0;
+  if (v) { scrollBy(0, v); dragLayout(); }
+  DRAG.raf = requestAnimationFrame(autoScroll);
+}
+function dragEnd() {
+  const d = DRAG;
+  if (!d) return;
+  d.ended = true;
+  cancelAnimationFrame(d.raf);
+  removeEventListener('pointermove', dragMove);
+  removeEventListener('pointerup', dragEnd);
+  removeEventListener('pointercancel', dragEnd);
+  document.body.classList.remove('is-dragging');
+  DRAG = null;
+  suppressClickUntil = Date.now() + 400;
+  if (d.to !== d.from) {
+    const [it] = GEN.items.splice(d.from, 1);
+    GEN.items.splice(d.to, 0, it);
+    navigator.vibrate?.(12);
+  }
+  render();
+}
+
+// ---- log a workout after the fact (forgot to start the app): date, start time, duration, then the sets
+function openManualLog(date) {
+  const now = new Date();
+  const k = date && date <= todayKey() ? date : todayKey();
+  const hh = String(Math.max(0, now.getHours() - 1)).padStart(2, '0');
+  openModal(`<button class="close" data-act="close" aria-label="Close">${ic('x')}</button>
+    <h2>${ic('edit', 'acc')} ${t('manual.title')}</h2><p class="muted small">${t('manual.sub')}</p>
+    <div class="item-grid">
+      <label class="field"><span>${t('cal.pickDate')}</span><input type="date" id="manDate" value="${k}" max="${todayKey()}"></label>
+      <label class="field"><span>${t('manual.time')}</span><input type="time" id="manTime" value="${k === todayKey() ? `${hh}:00` : '18:00'}"></label>
+    </div>
+    <label class="field"><span>${t('manual.duration')}</span><input type="number" inputmode="numeric" id="manDur" value="60" min="5" max="300"></label>
+    <div class="muted small" style="margin-bottom:6px">${t('manual.base')}</div>
+    <div class="man-base">
+      <label class="man-opt"><input type="radio" name="manBase" value="" checked><span>${ic('plus')} ${t('manual.empty')}</span></label>
+      ${sortedRoutines().map(r => `<label class="man-opt"><input type="radio" name="manBase" value="${r.id}"><span>${mosaic(r.items, 'xs')} ${esc(r.name)}</span></label>`).join('')}
+    </div>
+    <button class="btn primary big" data-act="manualGo" style="margin-top:16px">${ic('arrowRight')} ${t('manual.continue')}</button>`);
 }
 
 // ============================================================ LIBRARY
@@ -1312,10 +1439,11 @@ function applyAlt(id) {
 
 // ---- picker (add exercise to workout / pick any alternative)
 const PICK = { q: '', group: '', equip: '', level: '', mine: true, replace: null, alt: false, gen: false };
-function openPicker({ replace = null, alt = false, gen = false } = {}) {
-  Object.assign(PICK, { q: '', group: gen && GEN.groups.length === 1 ? GEN.groups[0] : '', equip: '', level: '', replace, alt, gen });
+function openPicker({ replace = null, alt = false, gen = false, genIdx = null } = {}) {
+  const g0 = genIdx != null ? GEN.items[genIdx]?.[5] || '' : gen && GEN.groups.length === 1 ? GEN.groups[0] : '';
+  Object.assign(PICK, { q: '', group: g0, equip: '', level: '', replace, alt, gen, genIdx });
   openModal(`<button class="close" data-act="close" aria-label="Close">${ic('x')}</button>
-    <h2>${gen ? t('gen.addAny') : alt || replace != null ? t('picker.replace') : t('picker.add')}</h2>
+    <h2>${genIdx != null ? t('item.swap') : gen ? t('gen.addAny') : alt || replace != null ? t('picker.replace') : t('picker.add')}</h2>
     <div class="search-box">${ic('search')}<input type="search" id="pickQ" placeholder="${t('picker.search', { n: EX.length })}" autocomplete="off"></div>
     <div class="chips pick-groups">${['', ...Object.keys(GROUPS)].map(g => `<button class="chip ${PICK.group === g ? 'on' : ''}" data-act="pickGroup" data-g="${g}">${g ? groupLabel(g) : t('all')}</button>`).join('')}</div>
     <div class="row wrap pick-filters">
@@ -1348,9 +1476,10 @@ function renderPick() {
 }
 
 // ============================================================ WORKOUT
-async function startWorkout({ name = 'Workout', items = [], programId = null, dayIdx = null, planId = null, routineId = null } = {}) {
+async function startWorkout({ name = 'Workout', items = [], programId = null, dayIdx = null, planId = null, routineId = null, start = Date.now(), manual = null } = {}) {
   if (S.active && !(await ask({ msg: t('wo.inProgressConfirm'), ok: t('discard'), danger: true }))) return;
-  S.active = { id: uid(), name, start: Date.now(), programId, dayIdx, planId, routineId, note: '', exercises: [] };
+  S.active = { id: uid(), name, start, programId, dayIdx, planId, routineId, note: '', exercises: [] };
+  if (manual) S.active.manual = manual;
   for (const it of items) {
     const r = resolve(it[0]);
     pushExercise(r.id, { sets: it[1], target: it[2], rest: it[3], orig: r.why ? r.orig : null, ss: it[4] || null });
@@ -1377,8 +1506,12 @@ VIEWS.workout = () => {
   const a = S.active;
   if (!a) return routinesHub();
   return `<input type="text" id="woName" value="${esc(a.name)}" aria-label="${t('wo.name')}" style="font-weight:800;font-size:1.35rem;background:none;border-color:transparent;padding-left:2px;margin-bottom:8px;backdrop-filter:none">
+    ${a.manual ? `<div class="card manual-bar"><div class="row wrap" style="gap:10px">
+        <span class="chip swap">${ic('edit')} ${t('manual.badge', { d: `${fmtDate(a.start)} · ${new Date(a.start).toLocaleTimeString(LOC(), { hour: '2-digit', minute: '2-digit' })}` })}</span><span class="spacer"></span>
+        <label class="row small" style="gap:6px">${t('manual.duration')} <input type="number" inputmode="numeric" id="manDurLive" value="${a.manual.min}" min="5" max="300" style="width:76px;padding:6px 8px"></label></div>
+        <button class="btn ghost sm" data-act="markAll" style="margin-top:10px">${ic('check')} ${t('manual.markAll')}</button></div>` : ''}
     <div class="grid stats" style="margin-bottom:14px">
-      ${stat(mmss((Date.now() - a.start) / 1000), t('duration'), 'woTimer')}
+      ${stat(a.manual ? mmss(a.manual.min * 60) : mmss((Date.now() - a.start) / 1000), t('duration'), 'woTimer')}
       ${stat(fmtVol(volumeOf(a)), t('volumeU', { u: U() }), 'woVol')}
       ${stat(`${setsDone(a)}/${a.exercises.reduce((n, e) => n + e.sets.length, 0)}`, t('setsDone'), 'woSets')}
     </div>
@@ -1458,7 +1591,7 @@ async function finishWorkout() {
     return;
   }
   a.exercises = a.exercises.map(e => ({ ...e, sets: e.sets.filter(s => s.done) })).filter(e => e.sets.length);
-  a.end = Date.now();
+  a.end = a.manual ? a.start + a.manual.min * 60000 : Date.now();
   const vol = volumeOf(a), prs = prCount(a), sets = setsDone(a);
   a.xp = Math.round(50 + sets * 5 + vol / 200 + prs * 25);
 
@@ -1528,7 +1661,7 @@ function tick() {
   const a = S.active, onWorkout = location.hash === '#workout';
   $('#activePill').classList.toggle('hidden', !a || onWorkout);
   if (a) {
-    const tm = mmss((Date.now() - a.start) / 1000);
+    const tm = a.manual ? mmss(a.manual.min * 60) : mmss((Date.now() - a.start) / 1000);
     $('#activeTimer').textContent = tm;
     const el = $('#woTimer');
     if (el) el.textContent = tm;
@@ -1831,6 +1964,66 @@ const ACT = {
     render();
   },
   genClear: () => { GEN.items = []; render(); },
+  genEdit: el => openItemEditor(+el.dataset.i),
+  itemSets: el => {
+    const it = GEN.items[EDIT_I];
+    if (!it) return;
+    it[1] = Math.min(10, Math.max(1, (parseInt(it[1], 10) || 1) + +el.dataset.d));
+    const b = $('#itemSets'); b.textContent = it[1]; b.classList.remove('bump'); void b.offsetWidth; b.classList.add('bump');
+  },
+  itemReps: el => {
+    const it = GEN.items[EDIT_I];
+    if (!it) return;
+    it[2] = el.dataset.v; $('#itemReps').value = el.dataset.v;
+    $$('[data-act=itemReps]').forEach(b => b.classList.toggle('on', b === el));
+  },
+  itemRest: el => {
+    const it = GEN.items[EDIT_I];
+    if (!it) return;
+    it[3] = +el.dataset.v;
+    $$('[data-act=itemRest]').forEach(b => b.classList.toggle('on', b === el));
+  },
+  itemReroll: () => {
+    const it = GEN.items[EDIT_I];
+    const used = new Set(GEN.items.map(x => x[0]));
+    const pool = it?.[5] ? ranked(it[5]).filter(e => !used.has(e.id)) : [];
+    if (!pool.length) return warn(t('noMatches'));
+    const e = pool[Math.floor(Math.random() * Math.min(pool.length, 6))];
+    GEN.items[EDIT_I] = [e.id, it[1], it[2], it[3], null, it[5], false];
+    openItemEditor(EDIT_I);
+    ok(t('gen.added', { x: esc(exName(e.id)) }), { ms: 1600 });
+  },
+  itemSwap: () => openPicker({ gen: true, genIdx: EDIT_I }),
+  itemRemove: () => {
+    const [it] = GEN.items.splice(EDIT_I, 1);
+    GEN.count = Math.max(1, GEN.items.length);
+    closeModal(); render();
+    if (it) toast(t('gen.removedEx', { x: esc(exName(it[0])) }), 'info', { ms: 1600 });
+  },
+  itemDone: () => { closeModal(); render(); ok(t('item.updated'), { ms: 1600 }); },
+  manualLog: () => openManualLog(),
+  calManual: () => openManualLog(CAL.sel || todayKey()),
+  manualGo: () => {
+    const date = $('#manDate').value, time = $('#manTime').value || '18:00', min = Math.round(+$('#manDur').value);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return shake($('#manDate'));
+    if (!(min >= 5 && min <= 300)) { shake($('#manDur')); return warn(t('manual.badDur')); }
+    const [hh, mm] = time.split(':').map(Number);
+    const d = fromKey(date); d.setHours(hh || 0, mm || 0, 0, 0);
+    if (d.getTime() > Date.now()) { shake($('#manTime')); return warn(t('manual.future')); }
+    const rid = $('input[name=manBase]:checked')?.value;
+    const r = rid ? S.routines.find(x => x.id === rid) : null;
+    const name = r ? r.name : cap(t('weekdayWorkout', { day: d.toLocaleDateString(LOC(), { weekday: 'long' }) }));
+    startWorkout({ name, items: r ? r.items : [], routineId: r?.id || null, start: d.getTime(), manual: { min } });
+  },
+  markAll: () => {
+    const a = S.active;
+    let n = 0;
+    a.exercises.forEach((e, ei) => e.sets.forEach((s, si) => {
+      if (!s.done && s.r > 0) { if (s.w == null) s.w = 0; s.done = true; checkPR(ei, si); n++; }
+    }));
+    save(); render();
+    n ? ok(t('manual.marked', { n })) : warn(t('enterReps'));
+  },
   genAddAny: () => openPicker({ gen: true }),
   genStart: () => {
     if (!GEN.items.length) return;
@@ -2024,6 +2217,11 @@ const ACT = {
   pickEx: el => {
     const id = el.dataset.id;
     if (PICK.alt) return applyAlt(id);
+    if (PICK.gen && PICK.genIdx != null) {
+      const old = GEN.items[PICK.genIdx];
+      if (old) GEN.items[PICK.genIdx] = [id, old[1], old[2], old[3], null, groupOf(id) || old[5], false];
+      closeModal(); render(); return ok(t('gen.added', { x: esc(exName(id)) }));
+    }
     if (PICK.gen) { GEN.items.push(itemFor(EXMAP[id], groupOf(id), false)); GEN.count = GEN.items.length; closeModal(); render(); return ok(t('gen.added', { x: esc(exName(id)) })); }
     if (!S.active) { closeModal(); return startWorkout({ name: t('session', { x: exName(id) }), items: [[id, 3, '', S.profile.rest]] }); }
     if (PICK.replace != null) { const old = S.active.exercises[PICK.replace]; pushExercise(id, { sets: old.sets.length, target: old.target, rest: old.rest }, PICK.replace); }
@@ -2058,7 +2256,7 @@ const ACT = {
       if (nx && !nx.done) { if (nx.w == null) nx.w = s.w; if (nx.r == null) nx.r = s.r; }
       // superset (biserie): no rest between the paired exercises, rest after the last one of the pair
       const nextEx = S.active.exercises[ei + 1];
-      if (e.ss && nextEx?.ss === e.ss) stopRest(); else startRest(e.rest || S.profile.rest);
+      if (S.active.manual || (e.ss && nextEx?.ss === e.ss)) stopRest(); else startRest(e.rest || S.profile.rest);
       navigator.vibrate?.(15);
     } else {
       s.done = false; delete s.pr;
@@ -2149,7 +2347,9 @@ const ACT = {
   },
 };
 
+let suppressClickUntil = 0;
 document.addEventListener('click', ev => {
+  if (Date.now() < suppressClickUntil) { ev.preventDefault(); ev.stopPropagation(); return; }
   if (ev.target === $('#modal')) { openProgramId = null; return closeModal(); }
   const r = ev.target.closest('[data-rest]');
   if (r && rest) {
@@ -2175,6 +2375,8 @@ document.addEventListener('input', ev => {
   }
   if (el.dataset.gi != null) { const it = GEN.items[+el.dataset.gi]; if (it) it[el.dataset.gf === 'sets' ? 1 : 2] = el.value; return; }
   if (el.id === 'genName') { GEN.name = el.value; return; }
+  if (el.id === 'itemReps') { const it = GEN.items[EDIT_I]; if (it) it[2] = el.value.trim() || it[2]; $$('[data-act=itemReps]').forEach(b => b.classList.toggle('on', b.dataset.v === el.value.trim())); return; }
+  if (el.id === 'manDurLive' && S.active?.manual) { const v = Math.round(+el.value); if (v >= 5 && v <= 300) { S.active.manual.min = v; persist(); const tm = $('#woTimer'); if (tm) tm.textContent = mmss(v * 60); } return; }
   if (el.id === 'woName' && S.active) { S.active.name = el.value; persist(); return; }
   if (el.id === 'woNote' && S.active) { S.active.note = el.value; persist(); return; }
   if (el.id === 'libQ') { LIB.q = el.value; LIB.limit = 48; renderGrid(false); return; }
