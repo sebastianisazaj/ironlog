@@ -686,3 +686,9 @@ input[type=time] { background: var(--glass-input); border: 1px solid var(--glass
 .rt-tools .link-btn .ic { width: 16px; height: 16px; }
 .rt-sort-quick { gap: 8px; margin: 8px 0 6px; }
 .sel-thumb .mosaic.sm { box-shadow: none; }
+
+/* ================================================================ cardio: time-based rows */
+span.setno { display: inline-grid; place-items: center; vertical-align: middle; }
+.min-in { display: flex; align-items: center; justify-content: center; gap: 6px; }
+.min-in input { max-width: 120px; }
+.min-in span { color: var(--muted); font-size: .8rem; font-weight: 700; }
