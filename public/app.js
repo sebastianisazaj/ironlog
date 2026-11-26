@@ -730,39 +730,116 @@ function mosaic(items, cls = '') {
 }
 
 function routineCard(r, { compact = false } = {}) {
-  const last = routineLast(r), groups = routineGroups(r.items);
-  const meta = `${t('cal.exercises', { n: r.items.length })} · ${t('rt.min', { n: routineMinutes(r.items) })}`;
+  const today = todayItems(r), last = routineLast(r), groups = routineGroups(today), nOpt = optCount(r);
+  const meta = `${t('cal.exercises', { n: r.items.length })} · ${t('rt.min', { n: routineMinutes(today) })}`;
   if (compact) {
     return `<div class="rt-mini">
-      <div data-act="viewRoutine" data-id="${r.id}" class="rt-mini-tap">${mosaic(r.items, 'wide')}
+      <div data-act="viewRoutine" data-id="${r.id}" class="rt-mini-tap">${mosaic(today, 'wide')}
         <b>${esc(r.name)}</b><span class="muted small">${meta}</span>
         <span class="muted small rc-last">${last ? t('rt.last', { d: relDay(last) }) : t('rt.never')}</span></div>
       <button class="btn primary sm" data-act="startRoutine" data-id="${r.id}">${ic('play', 'fill')} ${t('start')}</button></div>`;
   }
   return `<div class="routine-card">
-    <div class="rc-tap" data-act="viewRoutine" data-id="${r.id}">${mosaic(r.items)}
+    <div class="rc-tap" data-act="viewRoutine" data-id="${r.id}">${mosaic(today)}
       <div class="rc-info"><b>${esc(r.name)}</b>
         <div class="muted small">${meta}</div>
-        ${groups.length ? `<div class="rc-groups">${groups.slice(0, 3).map(g => `<span class="chip">${groupLabel(g)}</span>`).join('')}${groups.length > 3 ? `<span class="chip">+${groups.length - 3}</span>` : ''}</div>` : ''}
+        ${groups.length || nOpt ? `<div class="rc-groups">${nOpt ? `<span class="chip swap">${ic('layers')} ${t('opt.slots', { n: nOpt })}</span>` : ''}${groups.slice(0, 3).map(g => `<span class="chip">${groupLabel(g)}</span>`).join('')}${groups.length > 3 ? `<span class="chip">+${groups.length - 3}</span>` : ''}</div>` : ''}
         <div class="muted small rc-last">${ic('timer')} ${last ? t('rt.last', { d: relDay(last) }) : t('rt.never')}</div></div></div>
     <div class="rc-actions">
       <button class="round-btn" data-act="editRoutine" data-id="${r.id}" aria-label="${t('edit')}" title="${t('edit')}">${ic('edit')}</button>
       <button class="btn primary sm" data-act="startRoutine" data-id="${r.id}">${ic('play', 'fill')} ${t('start')}</button></div></div>`;
 }
 
-function viewRoutine(id) {
+// ---- exercise options: a routine slot can hold alternatives (item[5] = [ids]); today's choice is r.sel[slot]
+const slotOpts = it => [it[0], ...(Array.isArray(it[5]) ? it[5].filter(x => x && x !== it[0]) : [])];
+const slotSel = (r, i) => { const k = +(r.sel?.[i] ?? 0); return k > 0 && k < slotOpts(r.items[i]).length ? k : 0; };
+const optCount = r => r.items.filter(it => slotOpts(it).length > 1).length;
+// What gets trained today: the chosen option of each slot (a cardio ↔ strength switch takes that kind's defaults)
+function todayItems(r) {
+  return r.items.map((it, i) => {
+    const id = slotOpts(it)[slotSel(r, i)];
+    if (id === it[0]) return it.slice(0, 5);
+    const base = isCardio(id) === isCardio(it[0]) ? it.slice(1, 4) : defItem(id).slice(1, 4);
+    return [id, ...base, it[4] || null];
+  });
+}
+
+function slotView(r, i) {
+  const it = r.items[i], opts = slotOpts(it), k = slotSel(r, i), cur = todayItems(r)[i];
+  const head = `<div class="slot-head"><span class="slot-n">${i + 1}</span>${it[4] ? `<span class="ss-tag">${esc(it[4])}</span>` : ''}
+    <span class="muted small slot-meta">${opts.length < 2 ? '' : isCardio(cur[0]) ? itemLine(cur) : t('setsXreps', { s: cur[1], r: esc(cur[2]), rest: mmss(cur[3]) })}</span><span class="spacer"></span>
+    ${opts.length > 1 ? `<span class="slot-dots">${opts.map((_, j) => `<i class="${j === k ? 'on' : ''}"></i>`).join('')}</span>`
+      : `<button class="link-btn small" data-act="optAdd" data-rid="${r.id}" data-i="${i}">${ic('layers')} ${t('opt.add')}</button>`}</div>`;
+  if (opts.length < 2) return `<div class="slot">${head}${programItem(it)}</div>`;
+  return `<div class="slot multi">${head}
+    <div class="carousel" data-rid="${r.id}" data-i="${i}">${opts.map((id, j) => `<div class="opt-card ${j === k ? 'on' : ''}" data-act="optTap" data-j="${j}" data-id="${esc(id)}">
+        <div class="opt-img">${hasImg(id) ? `<img src="${img(id)}" alt="" loading="lazy">` : ''}<span class="opt-badge">${j + 1}/${opts.length}</span>
+          <button class="opt-x" data-act="optRemove" data-rid="${r.id}" data-i="${i}" data-j="${j}" aria-label="${t('opt.remove')}" title="${t('opt.remove')}">${ic('x')}</button></div>
+        <b>${esc(exName(id))}</b><span class="muted small">${esc(T(EXMAP[id]?.equipment || 'body only'))}</span></div>`).join('')}
+      <button class="opt-card opt-new" data-act="optAdd" data-rid="${r.id}" data-i="${i}">${ic('plus')}<span>${t('opt.add')}</span></button></div></div>`;
+}
+
+// Swiping a carousel picks that option for today (saved right away)
+function mountCarousels(root, r) {
+  $$('.carousel', root).forEach(c => {
+    const i = +c.dataset.i, cards = $$('.opt-card:not(.opt-new)', c);
+    const on = cards[slotSel(r, i)];
+    if (on) c.scrollLeft = on.offsetLeft - (c.clientWidth - on.offsetWidth) / 2;
+    let timer;
+    c.addEventListener('scroll', () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const mid = c.scrollLeft + c.clientWidth / 2;
+        let best = 0, dist = Infinity;
+        cards.forEach((el, j) => { const d = Math.abs(el.offsetLeft + el.offsetWidth / 2 - mid); if (d < dist) { dist = d; best = j; } });
+        if (best === slotSel(r, i)) return;
+        (r.sel ||= {})[i] = best;
+        save();
+        cards.forEach((el, j) => el.classList.toggle('on', j === best));
+        const slot = c.closest('.slot');
+        $$('.slot-dots i', slot).forEach((d, j) => d.classList.toggle('on', j === best));
+        const cur = todayItems(r)[i];
+        $('.slot-meta', slot).textContent = isCardio(cur[0]) ? fmtTarget(cur[2]) : t('setsXreps', { s: cur[1], r: cur[2], rest: mmss(cur[3]) });
+        navigator.vibrate?.(8);
+      }, 120);
+    }, { passive: true });
+  });
+}
+
+function viewRoutine(id, focus = null) {
   const r = S.routines.find(x => x.id === id);
   if (!r) return;
-  const last = routineLast(r);
+  const last = routineLast(r), today = todayItems(r);
   openModal(`<button class="close" data-act="close" aria-label="Close">${ic('x')}</button>
-    <div class="rv-head">${mosaic(r.items, 'lg')}<div style="min-width:0"><h2 style="margin:0">${esc(r.name)}</h2>
-      <div class="muted small">${t('cal.exercises', { n: r.items.length })} · ${t('rt.min', { n: routineMinutes(r.items) })}</div>
+    <div class="rv-head">${mosaic(today, 'lg')}<div style="min-width:0"><h2 style="margin:0">${esc(r.name)}</h2>
+      <div class="muted small">${t('cal.exercises', { n: r.items.length })} · ${t('rt.min', { n: routineMinutes(today) })}</div>
       <div class="muted small">${last ? t('rt.last', { d: relDay(last) }) : t('rt.never')}</div></div></div>
-    ${r.items.map(programItem).join('')}
+    <p class="muted small opt-hint">${ic('layers')} ${optCount(r) ? t('opt.hint') : t('opt.hint0')}</p>
+    ${r.items.map((_, i) => slotView(r, i)).join('')}
     <div class="row wrap" style="margin-top:14px;gap:8px">
       <button class="btn danger" data-act="delRoutine" data-id="${r.id}">${ic('trash')} ${t('delete')}</button>
       <button class="btn ghost" data-act="editRoutine" data-id="${r.id}">${ic('edit')} ${t('edit')}</button><span class="spacer"></span>
       <button class="btn primary" data-act="startRoutine" data-id="${r.id}">${ic('play', 'fill')} ${t('start')}</button></div>`);
+  mountCarousels($('#sheet'), r);
+  if (focus != null) $$('#sheet .slot')[focus]?.scrollIntoView({ block: 'center' });
+}
+
+// Add / remove an option of a routine slot
+function addSlotOption(r, i, id) {
+  const it = r.items[i];
+  if (!it || slotOpts(it).includes(id)) return false;
+  it[5] = [...slotOpts(it).slice(1), id];
+  return true;
+}
+function removeSlotOption(r, i, j) {
+  const it = r.items[i], opts = slotOpts(it);
+  if (opts.length < 2) return;
+  opts.splice(j, 1);
+  if (j === 0 && isCardio(opts[0]) !== isCardio(it[0])) it.splice(1, 3, ...defItem(opts[0]).slice(1, 4));
+  it[0] = opts[0];
+  if (opts.length > 1) it[5] = opts.slice(1); else it.length = Math.min(it.length, 5);
+  const k = +(r.sel?.[i] ?? 0);
+  if (r.sel) r.sel[i] = k === j ? 0 : k > j ? k - 1 : k;
 }
 
 // Routines | Programs switch shared by both screens
@@ -993,7 +1070,11 @@ function fillToCount() {
 
 // What gets started/saved/scheduled. With biseries on, muscles alternate and consecutive exercises pair up (A1/A2, B1/B2…)
 function finalItems() {
-  return GEN.items.map((it, i) => [it[0], Math.min(10, Math.max(1, parseInt(it[1], 10) || 1)), String(it[2] || '10').slice(0, 12), it[3], ssLetter(i)]);
+  return GEN.items.map((it, i) => {
+    const base = [it[0], Math.min(10, Math.max(1, parseInt(it[1], 10) || 1)), String(it[2] || '10').slice(0, 12), it[3], ssLetter(i)];
+    const opts = (it[7] || []).filter(x => x !== it[0]);
+    return opts.length ? [...base, opts] : base;
+  });
 }
 // A1/A2, B1/B2… for consecutive pairs; a lone last exercise stays unpaired
 const ssLetter = i => (GEN.ss && GEN.items.length > 1 && !(i % 2 === 0 && i === GEN.items.length - 1) ? String.fromCharCode(65 + Math.floor(i / 2)) : null);
@@ -1011,7 +1092,7 @@ function loadForEdit(kind, id) {
   closeModal();
   GEN.edit = { kind, id };
   GEN.name = src.name;
-  GEN.items = src.items.map(it => [it[0], it[1], it[2], it[3] ?? S.profile.rest, null, groupOf(it[0]), false]);
+  GEN.items = src.items.map(it => [it[0], it[1], it[2], it[3] ?? S.profile.rest, null, groupOf(it[0]), false, Array.isArray(it[5]) ? [...it[5]] : []]);
   GEN.groups = [...new Set(GEN.items.map(it => it[5]).filter(Boolean))];
   GEN.count = Math.max(1, GEN.items.length);
   GEN.ss = src.items.some(it => it[4]);
@@ -1064,7 +1145,7 @@ VIEWS.build = () => {
           <span class="drag-h" aria-label="${t('drag.hint')}">${ic('grip')}</span>
           <span class="sel-thumb">${thumb(it[0], 52)}<span class="sel-n ${ssLetter(i) ? 'ss' : ''}">${ssLetter(i) ? `${ssLetter(i)}${(i % 2) + 1}` : i + 1}</span></span>
           <div class="sel-main" data-act="genEdit" data-i="${i}"><b>${esc(exName(it[0]))}</b>
-            <div class="muted small sel-meta"><span>${itemLine(it)}</span>${isCardio(it[0]) && !+it[3] ? '' : `<span>${ic('timer')} ${mmss(+it[3] || S.profile.rest)}</span>`}</div></div>
+            <div class="muted small sel-meta"><span>${itemLine(it)}</span>${it[7]?.length ? `<span class="opt-pill">${ic('layers')} +${it[7].length}</span>` : ''}${isCardio(it[0]) && !+it[3] ? '' : `<span>${ic('timer')} ${mmss(+it[3] || S.profile.rest)}</span>`}</div></div>
           <button class="round-btn" data-act="genEdit" data-i="${i}" aria-label="${t('item.title')}" title="${t('item.title')}">${ic('edit')}</button>
           <button class="round-btn" data-act="genRemove" data-i="${i}" aria-label="${t('gen.remove')}">${ic('x')}</button></div>`).join('')}</div>`
         : `<p class="muted small">${t('gen.hintPick')}</p>`}
@@ -1248,6 +1329,10 @@ function openItemEditor(i) {
     ${cardio ? `<p class="muted small" style="margin:-6px 0 12px">${ic('timer')} ${t('cardio.hint')}</p>` : ''}
     <div class="muted small">${t('item.rest')}</div>
     <div class="seg" style="margin:4px 0 16px">${rests.map(r => `<button class="${+it[3] === r ? 'on' : ''}" data-act="itemRest" data-v="${r}">${r ? mmss(r) : t('rest.none')}</button>`).join('')}</div>
+    <div class="opt-edit"><div class="row"><b>${ic('layers')} ${t('opt.title')}</b></div><p class="muted small" style="margin:4px 0 8px">${t('opt.sub')}</p>
+      ${(it[7] || []).map((id, j) => `<div class="opt-row">${thumb(id, 40)}<span>${esc(exName(id))}</span><button class="round-btn" data-act="itemOptRm" data-j="${j}" aria-label="${t('opt.remove')}">${ic('x')}</button></div>`).join('')}
+      <div class="row wrap" style="gap:8px;margin-top:8px"><button class="btn ghost sm" data-act="itemOptAdd">${ic('plus')} ${t('opt.add')}</button>
+        <button class="btn ghost sm" data-act="itemOptSuggest">${ic('sparkles')} ${t('opt.suggest')}</button></div></div>
     <div class="row wrap" style="gap:8px">
       <button class="btn ghost sm" data-act="showEx" data-id="${esc(it[0])}">${ic('info')} ${t('item.howto')}</button>
       ${it[5] && !cardio ? `<button class="btn ghost sm" data-act="itemReroll">${ic('refresh')} ${t('item.reroll')}</button>` : ''}
@@ -1498,11 +1583,13 @@ function applyAlt(id) {
 
 // ---- picker (add exercise to workout / pick any alternative)
 const PICK = { q: '', group: '', equip: '', level: '', mine: true, replace: null, alt: false, gen: false };
-function openPicker({ replace = null, alt = false, gen = false, genIdx = null } = {}) {
-  const g0 = genIdx != null ? GEN.items[genIdx]?.[5] || '' : gen && GEN.groups.length === 1 ? GEN.groups[0] : '';
-  Object.assign(PICK, { q: '', group: g0, equip: '', level: '', replace, alt, gen, genIdx });
+// slot: {rid, i} adds an option to a saved routine's slot; genOpt: creator item index to add an option to
+function openPicker({ replace = null, alt = false, gen = false, genIdx = null, slot = null, genOpt = null } = {}) {
+  const optBase = slot ? S.routines.find(r => r.id === slot.rid)?.items[slot.i]?.[0] : genOpt != null ? GEN.items[genOpt]?.[0] : null;
+  const g0 = optBase ? (isCardio(optBase) ? '' : groupOf(optBase) || '') :genIdx != null ? GEN.items[genIdx]?.[5] || '' : gen && GEN.groups.length === 1 ? GEN.groups[0] : '';
+  Object.assign(PICK, { q: '', group: g0, equip: '', level: '', replace, alt, gen, genIdx, opt: slot, genOpt });
   openModal(`<button class="close" data-act="close" aria-label="Close">${ic('x')}</button>
-    <h2>${genIdx != null ? t('item.swap') : gen ? t('gen.addAny') : alt || replace != null ? t('picker.replace') : t('picker.add')}</h2>
+    <h2>${optBase ? t('opt.addFor', { x: esc(exName(optBase)) }) : genIdx != null ? t('item.swap') : gen ? t('gen.addAny') : alt || replace != null ? t('picker.replace') : t('picker.add')}</h2>
     <div class="search-box">${ic('search')}<input type="search" id="pickQ" placeholder="${t('picker.search', { n: EX.length })}" autocomplete="off"></div>
     <div class="chips pick-groups">${['', ...Object.keys(GROUPS)].map(g => `<button class="chip ${PICK.group === g ? 'on' : ''}" data-act="pickGroup" data-g="${g}">${g ? groupLabel(g) : t('all')}</button>`).join('')}</div>
     <div class="row wrap pick-filters">
@@ -1527,7 +1614,10 @@ function renderPick() {
   }
   $$('[data-act=pickGroup]').forEach(b => b.classList.toggle('on', b.dataset.g === PICK.group));
   $('#pickCount').textContent = res.length === 1 ? t('result1') : t('results', { n: res.length });
-  const inList = new Set(PICK.gen ? GEN.items.map(it => it[0]) : []);
+  const optItem = PICK.opt ? S.routines.find(r => r.id === PICK.opt.rid)?.items[PICK.opt.i] : PICK.genOpt != null ? GEN.items[PICK.genOpt] : null;
+  // options for a cardio machine: other cardio first
+  if (optItem && isCardio(optItem[0]) && !ws.length) res = res.sort((a, b) => (b.category === 'cardio') - (a.category === 'cardio'));
+  const inList = new Set(optItem ? [optItem[0], ...(PICK.opt ? slotOpts(optItem) : optItem[7] || [])] : PICK.gen ? GEN.items.map(it => it[0]) : []);
   $('#pickList').innerHTML = res.slice(0, 60).map(e => `<div class="hist-item ${inList.has(e.id) ? 'in' : ''}" data-act="pickEx" data-id="${esc(e.id)}">${thumb(e.id, 56)}
     <div style="flex:1;min-width:0"><b>${esc(exName(e.id))}</b><div class="muted small">${esc(list(e.primaryMuscles))} · ${esc(e.equipment ? T(e.equipment) : cap(t('noEquip')))}</div></div>
     ${inList.has(e.id) ? `<span class="chip good">${ic('check')}</span>` : levelChip(e.level)}</div>`).join('') || `<div class="empty"><div class="big">${ic('search')}</div><p>${t('noMatches')}</p></div>`;
@@ -1945,6 +2035,8 @@ VIEWS.settings = () => {
     <button class="btn ghost" data-act="export">${ic('download')} ${t('export')}</button>
     <label class="btn ghost">${ic('upload')} ${t('import')}<input type="file" accept="application/json,.json" id="importFile" hidden></label>
     <span class="spacer"></span><button class="btn danger" data-act="reset">${ic('trash')} ${t('reset')}</button></div></div>
+  <div class="card"><h2>${ic('sparkles')} ${t('news.title')}</h2>${NEWS.map(n => `<div class="hist-item" data-act="newsOpen" data-id="${n.id}"><span class="install-ic">${ic(n.icon)}</span>
+    <div style="flex:1;min-width:0"><b>${esc(L(n.title))}</b><div class="muted small">${esc(L(n.body))}</div></div>${ic('arrowRight')}</div>`).join('')}</div>
   <div class="card small muted"><h3>${t('about')}</h3>${t('about.text', { link: '<a href="https://github.com/yuhonas/free-exercise-db" target="_blank" rel="noopener">yuhonas/free-exercise-db</a>', sync: p.syncName ? t('about.sync') : '' })}
     <p style="margin:10px 0 0">${t('version', { v: BUILD.startsWith('__') ? 'dev' : BUILD })}</p></div>`;
 };
@@ -2065,7 +2157,7 @@ const ACT = {
     const pool = ranked(it[5]).filter(e => !used.has(e.id));
     if (!pool.length) return;
     const e = pool[Math.floor(Math.random() * Math.min(pool.length, 6))];
-    GEN.items[i] = [e.id, it[1], it[2], it[3], null, it[5], false];
+    GEN.items[i] = [e.id, it[1], it[2], it[3], null, it[5], false, it[7] || []];
     render();
   },
   genRemove: el => outThen(el, () => { const [it] = GEN.items.splice(+el.dataset.i, 1); GEN.count = Math.max(1, GEN.items.length); render(); toast(t('gen.removedEx', { x: esc(exName(it[0])) }), 'info', { ms: 1600 }); }),
@@ -2088,6 +2180,18 @@ const ACT = {
     it[2] = el.dataset.v; $('#itemReps').value = el.dataset.v;
     $$('[data-act=itemReps]').forEach(b => b.classList.toggle('on', b === el));
   },
+  itemOptAdd: () => openPicker({ gen: true, genOpt: EDIT_I }),
+  itemOptRm: el => { const it = GEN.items[EDIT_I]; if (!it) return; it[7] = (it[7] || []).filter((_, j) => j !== +el.dataset.j); openItemEditor(EDIT_I); render(); toast(t('opt.removed')); },
+  itemOptSuggest: () => {
+    const it = GEN.items[EDIT_I];
+    if (!it) return;
+    const have = new Set([it[0], ...(it[7] || [])]);
+    const add = alternatives(it[0], 12).filter(e => !have.has(e.id)).slice(0, 2).map(e => e.id);
+    if (!add.length) return warn(t('alt.none'));
+    it[7] = [...(it[7] || []), ...add];
+    openItemEditor(EDIT_I); render();
+    ok(t('opt.suggested', { n: add.length }));
+  },
   itemRest: el => {
     const it = GEN.items[EDIT_I];
     if (!it) return;
@@ -2100,7 +2204,7 @@ const ACT = {
     const pool = it?.[5] ? ranked(it[5]).filter(e => !used.has(e.id)) : [];
     if (!pool.length) return warn(t('noMatches'));
     const e = pool[Math.floor(Math.random() * Math.min(pool.length, 6))];
-    GEN.items[EDIT_I] = [e.id, it[1], it[2], it[3], null, it[5], false];
+    GEN.items[EDIT_I] = [e.id, it[1], it[2], it[3], null, it[5], false, it[7] || []];
     openItemEditor(EDIT_I);
     ok(t('gen.added', { x: esc(exName(e.id)) }), { ms: 1600 });
   },
@@ -2124,7 +2228,7 @@ const ACT = {
     const rid = $('input[name=manBase]:checked')?.value;
     const r = rid ? S.routines.find(x => x.id === rid) : null;
     const name = r ? r.name : cap(t('weekdayWorkout', { day: d.toLocaleDateString(LOC(), { weekday: 'long' }) }));
-    startWorkout({ name, items: r ? r.items : [], routineId: r?.id || null, start: d.getTime(), manual: { min } });
+    startWorkout({ name, items: r ? todayItems(r) : [], routineId: r?.id || null, start: d.getTime(), manual: { min } });
   },
   markAll: () => {
     const a = S.active;
@@ -2155,6 +2259,7 @@ const ACT = {
     if (!target) { resetCreator(); return fail(t('edit.gone')); }
     target.name = genTitle().slice(0, 80);
     target.items = finalItems();
+    delete target.sel;
     save();
     popDone(t('edit.saved'), esc(target.name));
     resetCreator();
@@ -2290,7 +2395,31 @@ const ACT = {
     startWorkout({ name: `${L(p.name)} — ${L(p.days[di].name)}`, items: p.days[di].items, programId: p.id, dayIdx: di });
   },
   startEmpty: () => startWorkout({ name: cap(woName()) }),
-  startRoutine: el => { const r = S.routines.find(x => x.id === el.dataset.id); if (r) startWorkout({ name: r.name, items: r.items, routineId: r.id }); },
+  startRoutine: el => { const r = S.routines.find(x => x.id === el.dataset.id); if (r) startWorkout({ name: r.name, items: todayItems(r), routineId: r.id }); },
+  // carousel: tapping a side card brings it to the centre (= picks it); tapping the centred one shows the technique
+  optTap: el => {
+    if (el.classList.contains('on')) return showEx(el.dataset.id);
+    const c = el.parentElement;
+    c.scrollTo({ left: el.offsetLeft - (c.clientWidth - el.offsetWidth) / 2, behavior: 'smooth' });
+  },
+  newsStep: el => { const n = NEWS.find(x => x.id === el.dataset.id); if (n) showNews(n, +el.dataset.s); },
+  newsOpen: el => { const n = NEWS.find(x => x.id === el.dataset.id); if (n) showNews(n); },
+  optTour: () => {
+    closeModal();
+    const r = sortedRoutines()[0];
+    if (!r) { toast(t('news.coachNone'), 'info', { ms: 6000 }); return ACT.newRoutine(); }
+    go('workout');
+    setTimeout(() => {
+      viewRoutine(r.id);
+      setTimeout(() => { const c = $('#sheet .carousel'); c ? coach(c, t('news.coachSwipe')) : coach($('#sheet [data-act=optAdd]'), t('news.coachAdd')); }, 450);
+    }, 350);
+  },
+  optAdd: el => openPicker({ slot: { rid: el.dataset.rid, i: +el.dataset.i } }),
+  optRemove: el => {
+    const r = S.routines.find(x => x.id === el.dataset.rid), i = +el.dataset.i;
+    if (!r) return;
+    undoable(t('opt.removed'), () => { removeSlotOption(r, i, +el.dataset.j); save(); render(); viewRoutine(r.id, i); });
+  },
   viewRoutine: el => viewRoutine(el.dataset.id),
   newRoutine: () => { resetCreator(); GEN.tab = 'day'; go('build'); },
   rtSort: () => { rtSorting = true; render({ animate: true }); },
@@ -2338,10 +2467,25 @@ const ACT = {
   pickEx: el => {
     const id = el.dataset.id;
     if (PICK.alt) return applyAlt(id);
+    if (PICK.opt) {
+      const r = S.routines.find(x => x.id === PICK.opt.rid), i = PICK.opt.i;
+      if (!r) return closeModal();
+      if (!addSlotOption(r, i, id)) return warn(t('opt.dup'));
+      save(); render(); viewRoutine(r.id, i);
+      return ok(t('opt.added', { x: esc(exName(id)) }));
+    }
+    if (PICK.genOpt != null) {
+      const it = GEN.items[PICK.genOpt];
+      if (!it) return closeModal();
+      if (id === it[0] || (it[7] || []).includes(id)) return warn(t('opt.dup'));
+      it[7] = [...(it[7] || []), id];
+      openItemEditor(PICK.genOpt); render();
+      return ok(t('opt.added', { x: esc(exName(id)) }));
+    }
     if (PICK.gen && PICK.genIdx != null) {
       const old = GEN.items[PICK.genIdx];
       // same kind (strength ↔ strength, cardio ↔ cardio) keeps its sets/reps/rest; switching kind takes that kind's defaults
-      if (old) GEN.items[PICK.genIdx] = isCardio(id) === isCardio(old[0]) ? [id, old[1], old[2], old[3], null, groupOf(id) || old[5], false] : itemFor(EXMAP[id], groupOf(id) || old[5], false);
+      if (old) GEN.items[PICK.genIdx] = [...(isCardio(id) === isCardio(old[0]) ? [id, old[1], old[2], old[3], null, groupOf(id) || old[5], false] : itemFor(EXMAP[id], groupOf(id) || old[5], false)), (old[7] || []).filter(x => x !== id)];
       closeModal(); render(); return ok(t('gen.added', { x: esc(exName(id)) }));
     }
     if (PICK.gen) { GEN.items.push(itemFor(EXMAP[id], groupOf(id), false)); GEN.count = GEN.items.length; closeModal(); render(); return ok(t('gen.added', { x: esc(exName(id)) })); }
@@ -2640,6 +2784,88 @@ if ('serviceWorker' in navigator && DEV_NO_SW) {
   navigator.serviceWorker.addEventListener('controllerchange', () => { if (updateRequested) location.reload(); });
 }
 
+// ============================================================ WHAT'S NEW
+// Every new feature gets an entry here: existing users see it once on their next visit, with a step-by-step "Show me how".
+// demo: which mini illustration to animate for a step; go: action that takes the user to the feature.
+const NEWS = [{
+  id: 'opts-carousel-2026-11',
+  icon: 'layers',
+  title: { en: 'Options for every exercise', es: 'Opciones para cada ejercicio' },
+  body: {
+    en: 'Give each exercise in a routine a few alternatives, then swipe a carousel to choose what you’ll do today.',
+    es: 'Dale a cada ejercicio de tu rutina varias alternativas y desliza un carrusel para elegir cuál haces hoy.',
+  },
+  steps: [
+    { demo: 'add', title: { en: 'Add options', es: 'Añade opciones' },
+      text: { en: 'Open a routine and tap “Add option” next to an exercise. When editing a routine, the pencil on each exercise lets you add options or get 2 suggested ones.',
+        es: 'Abre una rutina y toca “Añadir opción” junto a un ejercicio. Al editar una rutina, el lápiz de cada ejercicio también te deja añadir opciones o pedir 2 sugeridas.' } },
+    { demo: 'swipe', title: { en: 'Swipe to choose', es: 'Desliza y elige' },
+      text: { en: 'Exercises with options show up as a carousel. Swipe left or right: the card in the middle is the one you’ll do today.',
+        es: 'Los ejercicios con opciones aparecen como un carrusel. Desliza a la izquierda o a la derecha: la tarjeta del centro es la que harás hoy.' } },
+    { demo: 'start', title: { en: 'Start training', es: 'Empieza a entrenar' },
+      text: { en: 'Tap Start and the workout uses the options you picked. Your last choice is remembered for next time.',
+        es: 'Toca Empezar y el entreno usa las opciones que elegiste. Tu última elección queda guardada para la próxima vez.' } },
+  ],
+  go: 'optTour',
+}];
+
+function newsDemo(kind) {
+  const im = id => `<img src="${img(id)}" alt="" loading="lazy">`;
+  if (kind === 'swipe') {
+    return `<div class="demo-box"><div class="demo-track">${['Barbell_Bench_Press_-_Medium_Grip', 'Dumbbell_Bench_Press', 'Pushups']
+      .map(id => `<div class="demo-card">${im(id)}<b>${esc(exName(id))}</b></div>`).join('')}</div><span class="demo-finger"></span></div>`;
+  }
+  if (kind === 'add') {
+    return `<div class="demo-box demo-add"><div class="demo-row">${im('Barbell_Squat')}<div><b>${esc(exName('Barbell_Squat'))}</b><small>4 × 6-8</small></div>
+      <span class="demo-pill">${ic('layers')} ${t('opt.add')}</span></div>
+      <div class="demo-row ghost">${im('Leg_Press')}<div><b>${esc(exName('Leg_Press'))}</b><small>${t('opt.title')}</small></div>${ic('plus')}</div></div>`;
+  }
+  return `<div class="demo-box demo-start"><div class="demo-mini">${['Dumbbell_Bench_Press', 'Barbell_Squat', 'Dumbbell_Lunges'].map(id => `<span>${im(id)}${ic('check')}</span>`).join('')}</div>
+    <span class="demo-btn">${ic('play', 'fill')} ${t('start')}</span></div>`;
+}
+
+function showNews(n, step = -1) {
+  if (!(S.seenNews ||= []).includes(n.id)) { S.seenNews.push(n.id); persist(); }
+  if (step < 0) {
+    return openModal(`<button class="close" data-act="close" aria-label="Close">${ic('x')}</button>
+      <div class="news"><div class="news-ic">${ic(n.icon)}</div><div class="news-kicker">${ic('sparkles')} ${t('news.kicker')}</div>
+        <h2>${esc(L(n.title))}</h2><p class="muted">${esc(L(n.body))}</p>${newsDemo(n.steps[1]?.demo || n.steps[0].demo)}
+        <div class="row" style="margin-top:16px;gap:8px"><button class="btn ghost" data-act="close">${t('news.later')}</button><span class="spacer"></span>
+          <button class="btn primary" data-act="newsStep" data-id="${n.id}" data-s="0">${ic('info')} ${t('news.how')}</button></div></div>`);
+  }
+  const s = n.steps[step], last = step === n.steps.length - 1;
+  openModal(`<button class="close" data-act="close" aria-label="Close">${ic('x')}</button>
+    <div class="news"><div class="news-kicker">${t('news.stepOf', { n: step + 1, m: n.steps.length })}</div>
+      <div class="news-dots">${n.steps.map((_, j) => `<i class="${j === step ? 'on' : j < step ? 'past' : ''}"></i>`).join('')}</div>
+      <h2>${esc(L(s.title))}</h2>${newsDemo(s.demo)}<p>${esc(L(s.text))}</p>
+      <div class="row" style="margin-top:16px;gap:8px">${step ? `<button class="btn ghost" data-act="newsStep" data-id="${n.id}" data-s="${step - 1}">${ic('arrowLeft')} ${t('news.back')}</button>` : ''}<span class="spacer"></span>
+        ${last ? `<button class="btn primary" data-act="${n.go}">${ic('arrowRight')} ${t('news.try')}</button>`
+          : `<button class="btn primary" data-act="newsStep" data-id="${n.id}" data-s="${step + 1}">${t('news.next')} ${ic('arrowRight')}</button>`}</div></div>`);
+}
+
+// Highlight a real control on screen with a short tip; goes away on the next tap
+function coach(el, text) {
+  $$('.coach').forEach(x => x.classList.remove('coach'));
+  $('#coachTip')?.remove();
+  if (!el) return;
+  el.classList.add('coach');
+  el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  const tip = document.createElement('div');
+  tip.id = 'coachTip';
+  tip.className = 'coach-tip';
+  tip.innerHTML = `${ic('sparkles')} ${esc(text)}`;
+  el.insertAdjacentElement('afterend', tip);
+  setTimeout(() => addEventListener('pointerdown', () => { el.classList.remove('coach'); tip.remove(); }, { once: true }), 400);
+}
+
+function maybeNews() {
+  S.seenNews ||= [];
+  // brand-new users get the normal app, not a list of changes they never knew about
+  if (!S.workouts.length && !S.routines.length) { S.seenNews = NEWS.map(n => n.id); persist(); return; }
+  const n = NEWS.find(x => !S.seenNews.includes(x.id));
+  if (n && !S.active && $('#modal').classList.contains('hidden')) showNews(n);
+}
+
 // ============================================================ boot
 (async function init() {
   applyStaticI18n();
@@ -2662,4 +2888,5 @@ if ('serviceWorker' in navigator && DEV_NO_SW) {
   EQUIP = uniq(e => [e.equipment]);
   CATS = uniq(e => [e.category]);
   render();
+  setTimeout(maybeNews, 900);
 })();
