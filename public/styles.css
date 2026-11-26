@@ -788,3 +788,12 @@ span.setno { display: inline-grid; place-items: center; vertical-align: middle; 
   .demo-track, .demo-finger, .demo-row.ghost, .demo-pill, .demo-mini .ic, .demo-btn, .coach { animation: none; }
   .demo-row.ghost, .demo-mini .ic { opacity: 1; }
 }
+
+/* ================================================================ Home "new in the app" card */
+.news-card { position: relative; border-color: color-mix(in srgb, var(--accent) 45%, var(--glass-border));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 14%, var(--glass)), color-mix(in srgb, var(--magenta) 10%, var(--glass))); }
+.news-card .close-x { position: absolute; right: 8px; top: 8px; display: grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 50%; background: var(--chip); color: var(--text); }
+.news-card .close-x .ic { width: 15px; height: 15px; }
+.news-card b { display: block; margin: 2px 34px 2px 0; }
+.news-ic.sm { width: 44px; height: 44px; margin: 0; flex: none; border-radius: 14px; }
+.news-ic.sm .ic { width: 22px; height: 22px; }

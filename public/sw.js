@@ -12,9 +12,17 @@ const FONT_CACHE = 'ironlog-fonts';
 const IMG_HOSTS = ['cdn.jsdelivr.net', 'raw.githubusercontent.com'];
 const FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
 
-// cache: 'reload' skips the HTTP cache so a new release never stores the previous release's files
+// A new release must never store the previous release's files. cache: 'reload' skips the browser's HTTP cache, and the
+// ?v=<build> query makes GitHub's CDN miss too (right after a deploy its edges can still hold the old app.js for minutes).
+// Files are stored under their plain URL. If app.js still isn't this release, the install fails and the browser retries later.
+async function fetchShell(u) {
+  const res = await fetch(new Request(`${u}${u.includes('?') ? '&' : '?'}v=${BUILD}`, { cache: 'reload' }));
+  if (!res.ok) throw new Error(`${u}: ${res.status}`);
+  if (u === 'app.js' && !BUILD.startsWith('__') && !(await res.clone().text()).includes(`'${BUILD}'`)) throw new Error('app.js is from another release');
+  return res;
+}
 self.addEventListener('install', ev => {
-  ev.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' })))));
+  ev.waitUntil(caches.open(VERSION).then(c => Promise.all(SHELL.map(async u => c.put(u, await fetchShell(u))))));
 });
 
 // The first install activates right away; an update waits until the user taps "Reload" in the app

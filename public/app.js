@@ -581,7 +581,7 @@ function render({ animate = false } = {}) {
   JUST = null;
   tick();
 }
-window.addEventListener('hashchange', () => { openProgramId = null; rtSorting = false; closeModal(); render(); });
+window.addEventListener('hashchange', () => { openProgramId = null; rtSorting = false; closeModal(); render(); if (EX.length) setTimeout(maybeNews, 600); });
 
 function moveInd() {
   const b = $('.tabbar button.on'), ind = $('#tabInd');
@@ -613,6 +613,13 @@ VIEWS.home = () => {
     <button class="rank-pill" data-go="progress" title="${st.xp.toLocaleString(LOC())} XP">${ic(rk.cur.icon)}<span>${L(rk.cur.name)}</span><i style="--p:${rk.pct.toFixed(0)}%"></i></button></div>`;
 
   if (!p.level) h += levelPicker(t('level.welcome'));
+  const nw = homeNews();
+  if (nw) {
+    h += `<div class="card news-card"><button class="close-x" data-act="newsDismiss" data-id="${nw.id}" aria-label="${t('news.later')}">${ic('x')}</button>
+      <div class="row" style="gap:12px;align-items:flex-start"><span class="news-ic sm">${ic(nw.icon)}</span><div style="flex:1;min-width:0">
+        <div class="news-kicker">${ic('sparkles')} ${t('news.badge')}</div><b>${esc(L(nw.title))}</b><div class="muted small">${esc(L(nw.body))}</div>
+        <button class="btn primary sm" data-act="newsStep" data-id="${nw.id}" data-s="0" style="margin-top:10px">${ic('info')} ${t('news.how')}</button></div></div></div>`;
+  }
   h += installCard({ dismissible: true });
   h += todayCard();
 
@@ -2402,7 +2409,8 @@ const ACT = {
     const c = el.parentElement;
     c.scrollTo({ left: el.offsetLeft - (c.clientWidth - el.offsetWidth) / 2, behavior: 'smooth' });
   },
-  newsStep: el => { const n = NEWS.find(x => x.id === el.dataset.id); if (n) showNews(n, +el.dataset.s); },
+  newsStep: el => { const n = NEWS.find(x => x.id === el.dataset.id); if (n) { newsDone(n.id); showNews(n, +el.dataset.s); } },
+  newsDismiss: el => outThen(el.closest('.news-card'), () => { newsDone(el.dataset.id); render(); }),
   newsOpen: el => { const n = NEWS.find(x => x.id === el.dataset.id); if (n) showNews(n); },
   optTour: () => {
     closeModal();
@@ -2747,8 +2755,11 @@ function installCard({ dismissible = false } = {}) {
 const BUILD = '__BUILD__'; // replaced with the commit id by the deploy workflow
 let updateReg = null, updateRequested = false;
 
+const OPENED_AT = Date.now();
 function showUpdate(reg) {
   updateReg = reg;
+  const fresh = Date.now() - OPENED_AT < 15000 && !S.active && $('#modal').classList.contains('hidden') && !document.activeElement?.matches?.('input, textarea');
+  if (fresh && reg.waiting) { toast(t('update.applying')); setTimeout(ACT.applyUpdate, 600); return; }
   if ($('#updateBar')) return;
   const bar = document.createElement('div');
   bar.id = 'updateBar';
@@ -2788,7 +2799,7 @@ if ('serviceWorker' in navigator && DEV_NO_SW) {
 // Every new feature gets an entry here: existing users see it once on their next visit, with a step-by-step "Show me how".
 // demo: which mini illustration to animate for a step; go: action that takes the user to the feature.
 const NEWS = [{
-  id: 'opts-carousel-2026-11',
+  id: 'opts-carousel-2026-11b',
   icon: 'layers',
   title: { en: 'Options for every exercise', es: 'Opciones para cada ejercicio' },
   body: {
@@ -2858,13 +2869,14 @@ function coach(el, text) {
   setTimeout(() => addEventListener('pointerdown', () => { el.classList.remove('coach'); tip.remove(); }, { once: true }), 400);
 }
 
+// Shown once per feature: popup on the next open (or right after a workout, if one was running), plus a Home card
 function maybeNews() {
   S.seenNews ||= [];
-  // brand-new users get the normal app, not a list of changes they never knew about
-  if (!S.workouts.length && !S.routines.length) { S.seenNews = NEWS.map(n => n.id); persist(); return; }
   const n = NEWS.find(x => !S.seenNews.includes(x.id));
   if (n && !S.active && $('#modal').classList.contains('hidden')) showNews(n);
 }
+const homeNews = () => NEWS.find(n => !(S.newsDone || []).includes(n.id));
+const newsDone = id => { if (!(S.newsDone ||= []).includes(id)) { S.newsDone.push(id); persist(); $('.news-card')?.remove(); } };
 
 // ============================================================ boot
 (async function init() {
